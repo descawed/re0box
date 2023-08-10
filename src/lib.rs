@@ -31,6 +31,19 @@ static mut SCROLL_DOWN_TRAMPOLINE: [u8; 14] = [
     0xFF, 0xE6, // jmp esi
 ];
 
+static mut ORGANIZE_TRAMPOLINE: [u8; 26] = [
+    0x60, // pushad
+    0xE8, 0, 0, 0, 0, // call <fn>
+    0x85, 0xC0, // test eax, eax
+    0x75, 0x08, // jnz return
+    0x61, // popad
+    0xE8, 0, 0, 0, 0, // call GetCharacterBag
+    0xEB, 0x01, // jmp return
+    0x61, // pop_and_return: popad
+    0xB9, 0x3A, 0xC6, 0x4D, 0x00, // return: mov ecx, 0x4dc63a
+    0xFF, 0xE1, // jmp ecx
+];
+
 static mut EXCHANGE_IMMEDIATE_TRAMPOLINE: [u8; 14] = [
     0x60, // pushad
     0xE8, 0, 0, 0, 0, // call <fn>
@@ -50,10 +63,11 @@ static mut EXCHANGE_AMOUNT_TRAMPOLINE: [u8; 21] = [
 
 static mut BOX: ItemBox = ItemBox::new();
 
+const GET_CHARACTER_BAG: usize = 0x0050DA80;
 const GET_PARTNER_BAG: usize = 0x004DC8B0;
+const GET_PARTNER_BAG_ORG: usize = 0x004DC635;
 const ORGANIZE_BAG: usize = 0x004DA880;
-const PLAY_SOUND: usize = 0x005EE920;
-const POST_EXCHANGE_IMMEDIATE: usize = 0x005E40E4;
+const POST_EXCHANGE_IMMEDIATE: usize = 0x005E40C9;
 const POST_EXCHANGE_AMOUNT: usize = 0x005E4335;
 const SCROLL_UP_CHECK: usize = 0x005E386A;
 const SCROLL_DOWN_CHECK: usize = 0x005E3935;
@@ -133,6 +147,15 @@ unsafe fn organize_box() {
     }
 }
 
+unsafe extern "fastcall" fn get_box_if_open(character: *const c_void) -> *mut Bag {
+    if BOX.is_open() {
+        BOX.view()
+    } else {
+        let get_character_bag: unsafe extern "fastcall" fn(*const c_void) -> *mut Bag = std::mem::transmute(GET_CHARACTER_BAG);
+        get_character_bag(character)
+    }
+}
+
 unsafe extern "fastcall" fn get_partner_bag(unknown: *mut c_void) -> *mut Bag {
     if BOX.is_open() {
         return BOX.view();
@@ -169,8 +192,10 @@ fn main(reason: u32) -> Result<()> {
 
             // when the game tries to display the partner's inventory, show the box instead if it's open
             let bag_jump = jmp(GET_PARTNER_BAG, get_partner_bag as usize);
+            let bag_call = call(GET_PARTNER_BAG_ORG, get_box_if_open as usize);
             unsafe {
                 patch(GET_PARTNER_BAG, &bag_jump)?;
+                patch(GET_PARTNER_BAG_ORG, &bag_call)?;
 
                 // when trying to scroll up past the top inventory row, scroll the box view
                 let scroll_up_jump = jl(SCROLL_UP_CHECK, SCROLL_UP_TRAMPOLINE.as_ptr() as usize);
@@ -182,12 +207,17 @@ fn main(reason: u32) -> Result<()> {
                 set_trampoline(&mut SCROLL_DOWN_TRAMPOLINE, 1, scroll_down as usize)?;
                 patch(SCROLL_DOWN_CHECK, &scroll_down_jump)?;
 
-                // after exchanging an item that doesn't require transferring a certain amount, update the box display
-                let exchange_immediate_jump = jmp(POST_EXCHANGE_IMMEDIATE, EXCHANGE_IMMEDIATE_TRAMPOLINE.as_ptr() as usize);
-                set_trampoline(&mut EXCHANGE_IMMEDIATE_TRAMPOLINE, 1, organize_box as usize)?;
-                patch(POST_EXCHANGE_IMMEDIATE, &exchange_immediate_jump)?;
+                // let organize_jump = jmp(GET_PARTNER_BAG_ORG, ORGANIZE_TRAMPOLINE.as_ptr() as usize);
+                // set_trampoline(&mut ORGANIZE_TRAMPOLINE, 1, get_box_if_open as usize)?;
+                // set_trampoline(&mut ORGANIZE_TRAMPOLINE, 12, GET_CHARACTER_BAG)?;
+                // patch(GET_PARTNER_BAG_ORG, &organize_jump)?;
 
-                // after exchanging an item that involves transferring a certain amount, update the box display
+                // after exchanging an item that doesn't require transferring a certain amount, update the box display
+                //let exchange_immediate_jump = jmp(POST_EXCHANGE_IMMEDIATE, EXCHANGE_IMMEDIATE_TRAMPOLINE.as_ptr() as usize);
+                //set_trampoline(&mut EXCHANGE_IMMEDIATE_TRAMPOLINE, 1, organize_box as usize)?;
+                //patch(POST_EXCHANGE_IMMEDIATE, &exchange_immediate_jump)?;
+
+                // after exchanging an item that involves transferring a certain amount, re-organize the box
                 let exchange_amount_jump = jmp(POST_EXCHANGE_AMOUNT, EXCHANGE_AMOUNT_TRAMPOLINE.as_ptr() as usize);
                 set_trampoline(&mut EXCHANGE_AMOUNT_TRAMPOLINE, 1, organize_box as usize)?;
                 patch(POST_EXCHANGE_AMOUNT, &exchange_amount_jump)?;
