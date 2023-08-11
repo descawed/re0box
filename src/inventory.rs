@@ -1,4 +1,5 @@
 const BAG_SIZE: usize = 6;
+const SLOT_TWO: i32 = 180;
 
 #[derive(Debug, Default, Clone)]
 #[repr(C)]
@@ -9,10 +10,7 @@ struct Item {
 
 impl Item {
     pub const fn empty() -> Self {
-        Self {
-            id: 0,
-            count: 0,
-        }
+        Self { id: 0, count: 0 }
     }
 
     pub const fn is_empty(&self) -> bool {
@@ -33,10 +31,24 @@ impl Bag {
     pub const fn empty() -> Self {
         Self {
             unknown00: 0,
-            items: [Item::empty(), Item::empty(), Item::empty(), Item::empty(), Item::empty(), Item::empty()],
+            items: [
+                Item::empty(),
+                Item::empty(),
+                Item::empty(),
+                Item::empty(),
+                Item::empty(),
+                Item::empty(),
+            ],
             personal_item: Item::empty(),
             equipped_item_index: -1,
         }
+    }
+
+    pub fn is_organized(&self) -> bool {
+        // if the second half of a two-slot item is in an even-numbered slot, we're not organized
+        !(self.items.iter().step_by(2).any(|i| i.id == SLOT_TWO)
+        // if there's an empty slot followed by a non-empty slot, we're not organized
+        || self.items.iter().skip_while(|i| !i.is_empty()).any(|i| !i.is_empty()))
     }
 }
 
@@ -61,15 +73,76 @@ impl ItemBox {
     fn update_view(&mut self) {
         let num_items = self.items.len();
         let num_items_ahead = num_items - self.index;
+        // make sure we always have at least a view's worth of items
         if num_items_ahead < BAG_SIZE {
             let new_size = num_items + BAG_SIZE - num_items_ahead;
             self.items.resize_with(new_size, Default::default);
         }
-        self.view.items.clone_from_slice(&self.items[self.index..self.index+BAG_SIZE])
+        self.view
+            .items
+            .clone_from_slice(&self.items[self.index..self.index + BAG_SIZE])
     }
 
-    fn update_from_view(&mut self) {
-        self.items[self.index..self.index+BAG_SIZE].clone_from_slice(&self.view.items);
+    pub fn update_from_view(&mut self) {
+        // we want to wait until the game has finished organizing the view before we update
+        if !self.view.is_organized() {
+            return;
+        }
+
+        let view_end = self.index + BAG_SIZE;
+        let view_slice = &mut self.items[self.index..view_end];
+        view_slice.clone_from_slice(&self.view.items);
+        // if any items were removed from the view, we should shift up the contents of the box to
+        // to fill the empty space. the game organizes the view for us when things are moved around,
+        // so any empty spaces should always be at the end.
+        let num_empty: usize = view_slice
+            .iter()
+            .map(|i| if i.is_empty() { 1 } else { 0 })
+            .sum();
+        if num_empty > 0 && !self.items.get(view_end).map_or(true, Item::is_empty) {
+            let remove_start = view_end - num_empty;
+            self.items.drain(remove_start..view_end);
+            // now we need to check and see if any two-slot items have ended up at an odd index.
+            // if they have, we need to find the range of two-slot items at odd indexes, then move
+            // them back one slot and move the item that was before them to the end.
+            let mut check_start = remove_start;
+            loop {
+                let mut iter = self
+                    .items
+                    .iter()
+                    .enumerate()
+                    .skip(check_start & !1)
+                    .step_by(2);
+                if let Some((bad_index, _)) = iter.find(|(_, i)| i.id == SLOT_TWO) {
+                    // the first half of the item is in the previous slot, so back up 2 to find the
+                    // preceding item
+                    if bad_index < 2 {
+                        panic!(
+                            "Box contents are screwed up: half an item at the beginning of the box"
+                        );
+                    }
+                    let range_start = bad_index - 2;
+
+                    let range_end = match iter.find(|(_, i)| i.id != SLOT_TWO) {
+                        Some((i, _)) => i - 1, // back up one because we're iterating by 2
+                        None => self.items.len(),
+                    };
+
+                    // this shouldn't happen, but if somehow we ended up with an empty slot in the
+                    // middle of the box, just delete it
+                    if self.items[range_start].is_empty() {
+                        self.items.remove(range_start);
+                    } else {
+                        self.items[range_start..range_end].rotate_left(1);
+                    }
+
+                    check_start = range_end;
+                } else {
+                    break;
+                }
+            }
+            self.update_view();
+        }
     }
 
     pub fn open(&mut self) {
@@ -81,23 +154,18 @@ impl ItemBox {
     }
 
     pub fn close(&mut self) {
-        if self.is_open {
-            self.is_open = false;
-            self.update_from_view();
-        }
+        self.is_open = false;
     }
 
     pub fn scroll_view(&mut self, offset: isize) {
-        // before we change the view, copy whatever is in it back to the box
-        self.update_from_view();
-
         // index must be a multiple of 2; round offset up if it was odd
         let mut new_index = self.index as isize + (offset + 1) & !1;
         if new_index < 0 {
             new_index = 0;
         } else {
             // don't let the index point past the last row (pair of items) in the box
-            let last_row_index = (self.items.iter().rposition(|i| !i.is_empty()).unwrap_or(0) & !1) as isize;
+            let last_row_index =
+                (self.items.iter().rposition(|i| !i.is_empty()).unwrap_or(0) & !1) as isize;
             if new_index > last_row_index {
                 new_index = last_row_index;
             }
