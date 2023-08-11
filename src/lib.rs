@@ -59,6 +59,9 @@ const SCROLL_DOWN_CHECK: usize = 0x005E3935;
 const GET_PARTNER_CHARACTER: usize = 0x0066DEC0;
 const SUB_522A20: usize = 0x00522A20;
 const PTR_DCDF3C: usize = 0x00DCDF3C;
+const LEAVE_SOUND_ARG: usize = 0x005E3634;
+const LEAVE_MENU_STATE: usize = 0x005E363D;
+const FAIL_SOUND: i32 = 2053;
 
 const fn addr_offset(
     from: usize,
@@ -195,6 +198,10 @@ fn main(reason: u32) -> Result<()> {
                 set_trampoline(&mut ORGANIZE_TRAMPOLINE, 1, update_box as usize)?;
                 patch(ORGANIZE_END1, &organize_jump1)?;
                 patch(ORGANIZE_END2, &organize_jump2)?;
+
+                // disable leaving items since that would be OP when combined with the item box
+                patch(LEAVE_SOUND_ARG, &FAIL_SOUND.to_le_bytes())?;
+                patch(LEAVE_MENU_STATE, &[0xEB, 0x08])?; // short jump to skip the code that switches to the "leaving item" menu state
 
                 BOX.open();
             }
