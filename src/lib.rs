@@ -1,6 +1,5 @@
 #![cfg(windows)]
 
-use std::arch::asm;
 use std::ffi::c_void;
 use std::fs::File;
 use std::io::prelude::*;
@@ -15,17 +14,23 @@ use inventory::*;
 
 // I tried the naked-function crate, but it failed to compile for me, complaining about "unknown
 // directive" .pushsection. maybe it has something to do with the fact that I'm cross-compiling.
-static mut SCROLL_UP_TRAMPOLINE: [u8; 14] = [
+static mut SCROLL_UP_TRAMPOLINE: [u8; 20] = [
     0x60, // pushad
+    0x6A, 0xFE, // push -2
+    0x57, // push edi
     0xE8, 0, 0, 0, 0, // call <fn>
+    0x83, 0xC4, 0x08, // add esp,8
     0x61, // popad
     0xBE, 0x9E, 0x4D, 0x5E, 0, // mov esi, 0x5e4d9e
     0xFF, 0xE6, // jmp esi
 ];
 
-static mut SCROLL_DOWN_TRAMPOLINE: [u8; 14] = [
+static mut SCROLL_DOWN_TRAMPOLINE: [u8; 20] = [
     0x60, // pushad
+    0x6A, 0x02, // push 2
+    0x57, // push edi
     0xE8, 0, 0, 0, 0, // call <fn>
+    0x83, 0xC4, 0x08, // add esp,8
     0x61, // popad
     0xBE, 0x9E, 0x4D, 0x5E, 0, // mov esi, 0x5e4d9e
     0xFF, 0xE6, // jmp esi
@@ -35,11 +40,11 @@ static mut BOX: ItemBox = ItemBox::new();
 
 const GET_CHARACTER_BAG: usize = 0x0050DA80;
 const GET_PARTNER_BAG: usize = 0x004DC8B0;
+const DRAW_BAGS: usize = 0x005E6ED0;
 const GET_PARTNER_BAG_ORG: usize = 0x004DC635;
-const ORGANIZE_BAG: usize = 0x004DA880;
 const SCROLL_UP_CHECK: usize = 0x005E386A;
 const SCROLL_DOWN_CHECK: usize = 0x005E3935;
-const SUB_66DEC0: usize = 0x0066DEC0;
+const GET_PARTNER_CHARACTER: usize = 0x0066DEC0;
 const SUB_522A20: usize = 0x00522A20;
 const PTR_DCDF3C: usize = 0x00DCDF3C;
 
@@ -90,29 +95,11 @@ unsafe fn patch(addr: usize, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
-unsafe fn scroll_up() {
-    BOX.scroll_view(-2);
-    organize_box();
-}
-
-unsafe fn scroll_down() {
-    BOX.scroll_view(2);
-    organize_box();
-}
-
-unsafe fn organize_box() {
-    if BOX.is_open() {
-        // stable Rust doesn't support the thiscall calling convention, so we have to use assembly
-        let mut buffer = [0i32; 6];
-        let bag = BOX.view();
-        asm!(
-            "push {buf}",
-            "call {addr}",
-            in("ecx") bag,
-            buf = in(reg) buffer.as_mut_ptr(),
-            addr = in(reg) ORGANIZE_BAG,
-        );
-    }
+unsafe extern "C" fn scroll(unknown: *const c_void, offset: isize) {
+    BOX.scroll_view(offset);
+    // by default the inventory display doesn't update at this point, so we have to do it ourselves
+    let draw_bags: unsafe extern "fastcall" fn (*const c_void) -> isize = std::mem::transmute(DRAW_BAGS);
+    draw_bags(unknown);
 }
 
 unsafe extern "fastcall" fn get_box_if_open(character: *const c_void) -> *mut Bag {
@@ -131,7 +118,7 @@ unsafe extern "fastcall" fn get_partner_bag(unknown: *mut c_void) -> *mut Bag {
 
     // reimplementation of the original function
     let v2 = PTR_DCDF3C as *const *const c_void;
-    let sub_66dec0: unsafe extern "fastcall" fn(*const c_void) -> *const c_void = std::mem::transmute(SUB_66DEC0);
+    let get_partner_character: unsafe extern "fastcall" fn(*const c_void) -> *const c_void = std::mem::transmute(GET_PARTNER_CHARACTER);
     let sub_522a20: unsafe extern "fastcall" fn(*const c_void) -> i32 = std::mem::transmute(SUB_522A20);
 
     let v2 = *v2;
@@ -139,9 +126,9 @@ unsafe extern "fastcall" fn get_partner_bag(unknown: *mut c_void) -> *mut Bag {
         panic!("Pointer not initialized");
     }
 
-    let v3 = sub_66dec0(v2);
-    if !v3.is_null() {
-        let v4 = sub_522a20(v3);
+    let partner = get_partner_character(v2);
+    if !partner.is_null() {
+        let v4 = sub_522a20(partner);
         match v4 {
             1 | 2 | 3 => unknown.offset(32) as *mut Bag,
             5 | 7 => unknown.offset(96) as *mut Bag,
@@ -167,12 +154,12 @@ fn main(reason: u32) -> Result<()> {
 
                 // when trying to scroll up past the top inventory row, scroll the box view
                 let scroll_up_jump = jl(SCROLL_UP_CHECK, SCROLL_UP_TRAMPOLINE.as_ptr() as usize);
-                set_trampoline(&mut SCROLL_UP_TRAMPOLINE, 1, scroll_up as usize)?;
+                set_trampoline(&mut SCROLL_UP_TRAMPOLINE, 4, scroll as usize)?;
                 patch(SCROLL_UP_CHECK, &scroll_up_jump)?;
 
                 // when trying to scroll down past the last inventory row, scroll the box view
                 let scroll_down_jump = jge(SCROLL_DOWN_CHECK, SCROLL_DOWN_TRAMPOLINE.as_ptr() as usize);
-                set_trampoline(&mut SCROLL_DOWN_TRAMPOLINE, 1, scroll_down as usize)?;
+                set_trampoline(&mut SCROLL_DOWN_TRAMPOLINE, 4, scroll as usize)?;
                 patch(SCROLL_DOWN_CHECK, &scroll_down_jump)?;
 
                 BOX.open();
