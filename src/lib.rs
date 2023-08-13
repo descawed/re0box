@@ -94,13 +94,46 @@ static mut OPEN_BOX_TRAMPOLINE: [u8; 24] = [
     0xE9, 0x00, 0x00, 0x00, 0x00, // jmp SetRoomPhase
 ];
 
+static mut INVENTORY_MENU_TRAMPOLINE: [u8; 20] = [
+    0x60, // pushad
+    0xE8, 0x00, 0x00, 0x00, 0x00, // call <fn>
+    0x61, // popad
+    0x8D, 0xB7, 0x60, 0x02, 0x00, 0x00, // lea esi,[edi+0x260]
+    0xB9, 0xFA, 0xC7, 0x5D, 0x00, // mov ecx,0x5dc7fa
+    0xFF, 0xE1, // jmp ecx
+];
+
+static mut INVENTORY_CLOSE_TRAMPOLINE: [u8; 19] = [
+    0x60, // pushad
+    0xE8, 0x00, 0x00, 0x00, 0x00, // call <fn>
+    0x61, // popad
+    0x8B, 0x46, 0x60, // mov eax,[esi+0x60]
+    0x6A, 0x00, // push 0
+    0xB9, 0x88, 0x89, 0x5D, 0x00, // mov ecx,0x5d8988
+    0xFF, 0xE1, // jmp ecx
+];
+
 static mut BOX: ItemBox = ItemBox::new();
 static mut GAME: Game = Game::new();
+
+unsafe fn close_box() {
+    BOX.close();
+}
+
+unsafe extern "fastcall" fn menu_setup(menu: *mut c_void) {
+    if BOX.is_open() && GAME.menu_first_run {
+        GAME.menu_first_run = false;
+        GAME.box_partner = GAME.get_partner_character();
+        // toggle partner inventory display instead of partner control panel
+        *(menu.offset(0x2ca) as *mut bool) = true;
+    }
+}
 
 unsafe fn open_box() -> bool {
     if GAME.should_open_box {
         GAME.prepare_inventory();
         BOX.open();
+        GAME.menu_first_run = true;
     }
 
     GAME.should_open_box
@@ -149,15 +182,9 @@ unsafe extern "fastcall" fn get_partner_bag(unknown: *mut c_void) -> *mut Bag {
     }
 
     // reimplementation of the original function
-    let v2 = *(PTR_DCDF3C as *const *const c_void);
-    if v2.is_null() {
-        panic!("Pointer not initialized");
-    }
-
-    let partner = GAME.get_partner_character(v2);
+    let partner = GAME.get_partner_character();
     if !partner.is_null() {
-        let v4 = GAME.sub_522a20(partner);
-        match v4 {
+        match GAME.sub_522a20(partner) {
             1 | 2 | 3 => unknown.offset(32) as *mut Bag,
             5 | 7 => unknown.offset(96) as *mut Bag,
             _ => std::ptr::null_mut(),
@@ -234,6 +261,16 @@ fn main(reason: u32) -> Result<()> {
             set_trampoline(&mut OPEN_BOX_TRAMPOLINE, 1, open_box as usize)?;
             set_trampoline(&mut OPEN_BOX_TRAMPOLINE, 19, SET_ROOM_PHASE)?;
             patch(TYPEWRITER_PHASE_SET, &box_jump)?;
+
+            // make the menu show the box to start with instead of the partner control panel
+            let menu_jump = jmp(INVENTORY_MENU_START, INVENTORY_MENU_TRAMPOLINE.as_ptr() as usize);
+            set_trampoline(&mut INVENTORY_MENU_TRAMPOLINE, 1, menu_setup as usize)?;
+            patch(INVENTORY_MENU_START, &menu_jump)?;
+
+            // close the box after closing the inventory
+            let close_jump = jmp(INVENTORY_MENU_CLOSE, INVENTORY_CLOSE_TRAMPOLINE.as_ptr() as usize);
+            set_trampoline(&mut INVENTORY_CLOSE_TRAMPOLINE, 1, close_box as usize)?;
+            patch(INVENTORY_MENU_CLOSE, &close_jump)?;
         }
     }
 

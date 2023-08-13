@@ -21,6 +21,8 @@ pub const TYPEWRITER_CHOICE_CHECK: usize = 0x0057ADA7;
 pub const TYPEWRITER_PHASE_SET: usize = 0x0057ADE6;
 pub const SET_ROOM_PHASE: usize = 0x00610C20;
 pub const PREPARE_INVENTORY: usize = 0x005D71D0;
+pub const INVENTORY_MENU_START: usize = 0x005DC7F4;
+pub const INVENTORY_MENU_CLOSE: usize = 0x005D8983;
 pub const PTR_DD0BD0: usize = 0x00DD0BD0;
 pub const FAIL_SOUND: i32 = 2053;
 
@@ -30,11 +32,13 @@ pub struct Game {
     pub box_partner: *const c_void,
     pub user_had_ink_ribbon: bool,
     pub should_open_box: bool,
+    pub menu_first_run: bool,
     draw_bags: Option<unsafe extern "fastcall" fn(*const c_void) -> *mut Bag>,
     get_character_bag: Option<unsafe extern "fastcall" fn(*const c_void) -> *mut Bag>,
     get_partner_character: Option<unsafe extern "fastcall" fn(*const c_void) -> *const c_void>,
     sub_522a20: Option<unsafe extern "fastcall" fn(*const c_void) -> i32>,
     prepare_inventory: Option<unsafe extern "fastcall" fn(*const c_void) -> bool>,
+    ptr_dcdf3c: *const *const c_void,
     ptr_dd0bd0: *const *const c_void,
 }
 
@@ -44,12 +48,14 @@ impl Game {
             box_partner: std::ptr::null(),
             user_had_ink_ribbon: false,
             should_open_box: false,
+            menu_first_run: false,
             draw_bags: None,
             get_character_bag: None,
             get_partner_character: None,
             sub_522a20: None,
             prepare_inventory: None,
             ptr_dd0bd0: std::ptr::null(),
+            ptr_dcdf3c: std::ptr::null(),
         }
     }
 
@@ -60,6 +66,7 @@ impl Game {
         self.sub_522a20 = Some(std::mem::transmute(SUB_522A20));
         self.prepare_inventory = Some(std::mem::transmute(PREPARE_INVENTORY));
         self.ptr_dd0bd0 = PTR_DD0BD0 as *const *const c_void;
+        self.ptr_dcdf3c = PTR_DCDF3C as *const *const c_void;
     }
 
     pub unsafe fn draw_bags(&self, unknown: *const c_void) -> *mut Bag {
@@ -70,8 +77,8 @@ impl Game {
         self.get_character_bag.unwrap()(character)
     }
 
-    pub unsafe fn get_partner_character(&self, unknown: *const c_void) -> *const c_void {
-        self.get_partner_character.unwrap()(unknown)
+    pub unsafe fn get_partner_character(&self) -> *const c_void {
+        self.get_partner_character.unwrap()(*self.ptr_dcdf3c)
     }
 
     pub unsafe fn sub_522a20(&self, unknown: *const c_void) -> i32 {
