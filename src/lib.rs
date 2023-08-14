@@ -94,15 +94,6 @@ static mut OPEN_BOX_TRAMPOLINE: [u8; 24] = [
     0xE9, 0x00, 0x00, 0x00, 0x00, // jmp SetRoomPhase
 ];
 
-static mut INVENTORY_MENU_TRAMPOLINE: [u8; 20] = [
-    0x60, // pushad
-    0xE8, 0x00, 0x00, 0x00, 0x00, // call <fn>
-    0x61, // popad
-    0x8D, 0xB7, 0x60, 0x02, 0x00, 0x00, // lea esi,[edi+0x260]
-    0xB9, 0xFA, 0xC7, 0x5D, 0x00, // mov ecx,0x5dc7fa
-    0xFF, 0xE1, // jmp ecx
-];
-
 static mut INVENTORY_CLOSE_TRAMPOLINE: [u8; 19] = [
     0x60, // pushad
     0xE8, 0x00, 0x00, 0x00, 0x00, // call <fn>
@@ -113,19 +104,64 @@ static mut INVENTORY_CLOSE_TRAMPOLINE: [u8; 19] = [
     0xFF, 0xE1, // jmp ecx
 ];
 
+static mut INVENTORY_START_TRAMPOLINE: [u8; 24] = [
+    0x60, // pushad
+    0x57, // push edi
+    0xE8, 0x00, 0x00, 0x00, 0x00, // call <fn>
+    0x83, 0xC4, 0x04, // add esp,4
+    0x61, // popad
+    0xFF, 0x87, 0x94, 0x02, 0x00, 0x00, // inc dword ptr [edi+0x294]
+    0xBE, 0x8C, 0x1B, 0x5E, 0x00, // mov esi,0x5e1b8c
+    0xFF, 0xE6, // jmp esi
+];
+
+static mut CHANGE_CHARACTER_TRAMPOLINE: [u8; 25] = [
+    0x60, // pushad
+    0x57, // push edi
+    0xE8, 0x00, 0x00, 0x00, 0x00, // call <fn>
+    0x83, 0xC4, 0x04, // add esp,4
+    0x61, // popad
+    0x80, 0xBF, 0xCA, 0x02, 0x00, 0x00, 0x01, // cmp byte ptr [edi+0x2ca],1
+    0xB9, 0xD1, 0x2B, 0x5E, 0x00, // mov ecx,0x5e2bd1
+    0xFF, 0xE1, // jmp ecx
+];
+
+static mut OPEN_ANIMATION_TRAMPOLINE: [u8; 28] = [
+    0x60, // pushad
+    0xE8, 0x00, 0x00, 0x00, 0x00, // call <fn>
+    0x85, 0xC0, // test eax,eax
+    0x61, // popad
+    0x74, 0x07, // jz do_call
+    0xC7, 0x04, 0x24, 0x01, 0x00, 0x00, 0x00, // mov dword ptr [esp],1
+    0x68, 0x54, 0x1B, 0x5E, 0x00, // do_call: push 0x5e1b54
+    0xE9, 0x00, 0x00, 0x00, 0x00, // jmp PlayMenuAnimation
+];
+
 static mut BOX: ItemBox = ItemBox::new();
 static mut GAME: Game = Game::new();
+
+unsafe extern "fastcall" fn show_partner_inventory(menu: *mut c_void) -> bool {
+    if BOX.is_open() {
+        // flag that the partner inventory is displayed
+        *(menu.offset(0x2ca) as *mut bool) = true;
+    }
+
+    BOX.is_open()
+}
 
 unsafe fn close_box() {
     BOX.close();
 }
 
-unsafe extern "fastcall" fn menu_setup(menu: *mut c_void) {
-    if BOX.is_open() && GAME.menu_first_run {
-        GAME.menu_first_run = false;
-        GAME.box_partner = GAME.get_partner_character();
-        // toggle partner inventory display instead of partner control panel
-        *(menu.offset(0x2ca) as *mut bool) = true;
+unsafe extern "C" fn change_character(menu: *mut c_void) {
+    if BOX.is_open() {
+        GAME.update_exchange_state(menu);
+    }
+}
+
+unsafe extern "C" fn menu_setup(menu: *mut c_void) {
+    if BOX.is_open() {
+        GAME.init_menu(menu);
     }
 }
 
@@ -133,7 +169,6 @@ unsafe fn open_box() -> bool {
     if GAME.should_open_box {
         GAME.prepare_inventory();
         BOX.open();
-        GAME.menu_first_run = true;
     }
 
     GAME.should_open_box
@@ -142,14 +177,14 @@ unsafe fn open_box() -> bool {
 unsafe extern "C" fn check_typewriter_choice(choice: i32) -> bool {
     // "no" is option 2 for both messages
     if choice == 2 {
-        return true;
+        true
+    } else {
+        // otherwise, record whether we need to open the box
+        // there's only a choice 3 if the user had an ink ribbon, in which case it's "Use". if they
+        // didn't have an ink ribbon, the only other option is "Yes".
+        GAME.should_open_box = choice == 3 || !GAME.user_had_ink_ribbon;
+        false
     }
-
-    // otherwise, record whether we need to open the box
-    // there's only a choice 3 if the user had an ink ribbon, in which case it's "Use". if they
-    // didn't have an ink ribbon, the only other option is "Yes".
-    GAME.should_open_box = choice == 3 || !GAME.user_had_ink_ribbon;
-    false
 }
 
 unsafe extern "C" fn track_typewriter_message(had_ink_ribbon: bool) {
@@ -263,14 +298,26 @@ fn main(reason: u32) -> Result<()> {
             patch(TYPEWRITER_PHASE_SET, &box_jump)?;
 
             // make the menu show the box to start with instead of the partner control panel
-            let menu_jump = jmp(INVENTORY_MENU_START, INVENTORY_MENU_TRAMPOLINE.as_ptr() as usize);
-            set_trampoline(&mut INVENTORY_MENU_TRAMPOLINE, 1, menu_setup as usize)?;
-            patch(INVENTORY_MENU_START, &menu_jump)?;
+            let view_jump = jmp(INVENTORY_OPEN_ANIMATION, OPEN_ANIMATION_TRAMPOLINE.as_ptr() as usize);
+            set_trampoline(&mut OPEN_ANIMATION_TRAMPOLINE, 1, show_partner_inventory as usize)?;
+            set_trampoline(&mut OPEN_ANIMATION_TRAMPOLINE, 23, PLAY_MENU_ANIMATION)?;
+            patch(INVENTORY_OPEN_ANIMATION, &view_jump)?;
+
+            // always enable exchanging when a character first opens the box
+            let init_jump = jmp(INVENTORY_MENU_START, INVENTORY_START_TRAMPOLINE.as_ptr() as usize);
+            set_trampoline(&mut INVENTORY_START_TRAMPOLINE, 2, menu_setup as usize)?;
+            patch(INVENTORY_MENU_START, &init_jump)?;
+
+            // handle enabling and disabling exchanging when the character changes
+            let character_jump = jmp(INVENTORY_CHANGE_CHARACTER, CHANGE_CHARACTER_TRAMPOLINE.as_ptr() as usize);
+            set_trampoline(&mut CHANGE_CHARACTER_TRAMPOLINE, 2, change_character as usize)?;
+            patch(INVENTORY_CHANGE_CHARACTER, &character_jump)?;
 
             // close the box after closing the inventory
             let close_jump = jmp(INVENTORY_MENU_CLOSE, INVENTORY_CLOSE_TRAMPOLINE.as_ptr() as usize);
             set_trampoline(&mut INVENTORY_CLOSE_TRAMPOLINE, 1, close_box as usize)?;
             patch(INVENTORY_MENU_CLOSE, &close_jump)?;
+
         }
     }
 

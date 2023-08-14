@@ -21,18 +21,21 @@ pub const TYPEWRITER_CHOICE_CHECK: usize = 0x0057ADA7;
 pub const TYPEWRITER_PHASE_SET: usize = 0x0057ADE6;
 pub const SET_ROOM_PHASE: usize = 0x00610C20;
 pub const PREPARE_INVENTORY: usize = 0x005D71D0;
-pub const INVENTORY_MENU_START: usize = 0x005DC7F4;
+pub const INVENTORY_MENU_START: usize = 0x005E1B86;
 pub const INVENTORY_MENU_CLOSE: usize = 0x005D8983;
+pub const INVENTORY_CHANGE_CHARACTER: usize = 0x005E2BCA;
+pub const INVENTORY_OPEN_ANIMATION: usize = 0x005E1B4F;
+pub const PLAY_MENU_ANIMATION: usize = 0x005DBDF0;
 pub const PTR_DD0BD0: usize = 0x00DD0BD0;
 pub const FAIL_SOUND: i32 = 2053;
 
 /// Game API and state information
 #[derive(Debug)]
 pub struct Game {
-    pub box_partner: *const c_void,
     pub user_had_ink_ribbon: bool,
     pub should_open_box: bool,
-    pub menu_first_run: bool,
+    box_partner: *const c_void,
+    original_exchange_state: i8,
     draw_bags: Option<unsafe extern "fastcall" fn(*const c_void) -> *mut Bag>,
     get_character_bag: Option<unsafe extern "fastcall" fn(*const c_void) -> *mut Bag>,
     get_partner_character: Option<unsafe extern "fastcall" fn(*const c_void) -> *const c_void>,
@@ -45,10 +48,10 @@ pub struct Game {
 impl Game {
     pub const fn new() -> Self {
         Self {
-            box_partner: std::ptr::null(),
             user_had_ink_ribbon: false,
             should_open_box: false,
-            menu_first_run: false,
+            box_partner: std::ptr::null(),
+            original_exchange_state: 0,
             draw_bags: None,
             get_character_bag: None,
             get_partner_character: None,
@@ -67,6 +70,25 @@ impl Game {
         self.prepare_inventory = Some(std::mem::transmute(PREPARE_INVENTORY));
         self.ptr_dd0bd0 = PTR_DD0BD0 as *const *const c_void;
         self.ptr_dcdf3c = PTR_DCDF3C as *const *const c_void;
+    }
+
+    pub unsafe fn init_menu(&mut self, menu: *mut c_void) {
+        // always allow exchange on first open because the active character will be the one who
+        // opened the box
+        let exchange_state = menu.offset(0x28b) as *mut i8;
+        self.original_exchange_state = *exchange_state;
+        *exchange_state = 0;
+        self.box_partner = self.get_partner_character();
+    }
+
+    pub unsafe fn update_exchange_state(&mut self, menu: *mut c_void) {
+        // if the current character is not the one who opened the box, restore the original exchange
+        // state
+        *(menu.offset(0x28b) as *mut i8) = if self.get_partner_character() != self.box_partner {
+            self.original_exchange_state
+        } else {
+            0
+        };
     }
 
     pub unsafe fn draw_bags(&self, unknown: *const c_void) -> *mut Bag {
