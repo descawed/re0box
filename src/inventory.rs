@@ -1,9 +1,12 @@
+use binrw::binrw;
+
 const BAG_SIZE: usize = 6;
 const SLOT_TWO: i32 = 180;
 
+#[binrw]
 #[derive(Debug, Default, Clone)]
 #[repr(C)]
-struct Item {
+pub struct Item {
     id: i32,
     count: i32,
 }
@@ -213,5 +216,13 @@ impl ItemBox {
 
     pub fn view(&mut self) -> &mut Bag {
         &mut self.view
+    }
+
+    pub fn get_contents(&self) -> &[Item] {
+        &self.items
+    }
+
+    pub fn set_contents(&mut self, items: Vec<Item>) {
+        self.items = items;
     }
 }

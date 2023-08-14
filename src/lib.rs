@@ -145,11 +145,67 @@ static mut SIZE_CHECK_TRAMPOLINE: [u8; 16] = [
     0xE9, 0x00, 0x00, 0x00, 0x00, // jmp <fn>
 ];
 
+static mut LOAD_SLOT_TRAMPOLINE: [u8; 24] = [
+    0x60, // pushad
+    0x56, // push esi
+    0xE8, 0x00, 0x00, 0x00, 0x00, // call <fn>
+    0x83, 0xC4, 0x04, // add esp,4
+    0x61, // popad
+    0x69, 0xF6, 0x50, 0xC8, 0x01, 0x00, // imul esi,0x1c850
+    0xB8, 0xF7, 0x25, 0x61, 0x00, // mov eax,0x6125f7
+    0xFF, 0xE0, // jmp eax
+];
+
+static mut LOAD_TRAMPOLINE: [u8; 25] = [
+    0x55, // push ebp
+    0x53, // push ebx
+    0xE8, 0x00, 0x00, 0x00, 0x00, // call <fn>
+    // we intentionally don't clean the stack because we're passing the same arguments to the next function
+    0x89, 0x44, 0x24, 0x04, // mov [esp+4],eax
+    0x8D, 0x4C, 0x24, 0x34, // lea ecx,[esp+0x34]
+    0x68, 0x80, 0x59, 0x8B, 0x00, // push 0x8b980
+    0xE9, 0x00, 0x00, 0x00, 0x00, // jmp sub_6FC610
+];
+
+static mut SAVE_SLOT_TRAMPOLINE: [u8; 24] = [
+    0x60, // pushad
+    0x57, // push edi
+    0xE8, 0x00, 0x00, 0x00, 0x00, // call <fn>
+    0x83, 0xC4, 0x04, // add esp,4
+    0x61, // popad
+    0x69, 0xFF, 0x50, 0xC8, 0x01, 0x00, // imul edi,0x1c850
+    0xB8, 0xEF, 0x34, 0x61, 0x00, // mov eax,0x6134ef
+    0xFF, 0xE0, // jmp eax
+];
+
+static mut SAVE_TRAMPOLINE: [u8; 11] = [
+    0x50, // push eax
+    0x68, 0xC8, 0x5C, 0x8B, 0x00, // push 0x8b5cc8
+    0xE9, 0x00, 0x00, 0x00, 0x00, // jmp <fn>
+];
+
 static mut BOX: ItemBox = ItemBox::new();
 static mut GAME: Game = Game::new();
 
+unsafe extern "C" fn save_slot(index: usize) {
+    GAME.save_to_slot(BOX.get_contents(), index);
+}
+
+unsafe extern "stdcall" fn save_data(filename: *const u8, buf: *const u8, size: usize) -> bool {
+    GAME.save(std::slice::from_raw_parts(buf, size), filename).is_ok()
+}
+
+unsafe extern "C" fn load_slot(index: usize) {
+    BOX.set_contents(GAME.load_from_slot(index));
+}
+
+unsafe extern "C" fn load_data(buf: *const u8, size: usize) -> usize {
+    GAME.load(std::slice::from_raw_parts(buf, size)).unwrap();
+    UNMODDED_SAVE_SIZE
+}
+
 // we use stdcall here because we're returning directly to the game, so we need to clean the stack
-unsafe extern "system" fn make_room_for_double(
+unsafe extern "stdcall" fn make_room_for_double(
     menu: *const c_void,
     unknown: *const c_void,
     item_size: usize,
@@ -374,6 +430,27 @@ fn main(reason: u32) -> Result<()> {
                 make_room_for_double as usize,
             )?;
             patch(EXCHANGE_SIZE_CHECK, &double_jump)?;
+
+            // load data
+            let load_jump = jmp(POST_LOAD, LOAD_TRAMPOLINE.as_ptr() as usize);
+            set_trampoline(&mut LOAD_TRAMPOLINE, 2, load_data as usize)?;
+            set_trampoline(&mut LOAD_TRAMPOLINE, 20, SUB_6FC610)?;
+            patch(POST_LOAD, &load_jump)?;
+
+            // load slot
+            let ls_jump = jmp(LOAD_SLOT, LOAD_SLOT_TRAMPOLINE.as_ptr() as usize);
+            set_trampoline(&mut LOAD_SLOT_TRAMPOLINE, 2, load_slot as usize)?;
+            patch(LOAD_SLOT, &ls_jump)?;
+
+            // save data
+            let save_jump = jmp(STEAM_SAVE, SAVE_TRAMPOLINE.as_ptr() as usize);
+            set_trampoline(&mut SAVE_TRAMPOLINE, 6, save_data as usize)?;
+            patch(STEAM_SAVE, &save_jump)?;
+
+            // save slot
+            let ss_jump = jmp(SAVE_SLOT, SAVE_SLOT_TRAMPOLINE.as_ptr() as usize);
+            set_trampoline(&mut SAVE_SLOT_TRAMPOLINE, 2, save_slot as usize)?;
+            patch(SAVE_SLOT, &ss_jump)?;
         }
     }
 

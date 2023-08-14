@@ -1,6 +1,11 @@
+use std::arch::asm;
 use std::ffi::c_void;
+use std::io::Cursor;
 
-use super::inventory::Bag;
+use anyhow::{anyhow, Result};
+use binrw::{binrw, BinReaderExt, BinWrite};
+
+use super::inventory::{Bag, Item};
 
 pub const GET_CHARACTER_BAG: usize = 0x0050DA80;
 pub const GET_PARTNER_BAG: usize = 0x004DC8B0;
@@ -29,7 +34,31 @@ pub const PLAY_MENU_ANIMATION: usize = 0x005DBDF0;
 pub const EXCHANGE_SIZE_CHECK: usize = 0x005E3E94;
 pub const SUB_4DB330: usize = 0x004DB330;
 pub const PTR_DD0BD0: usize = 0x00DD0BD0;
+pub const STEAM_REMOTE_STORAGE: usize = 0x00CB1440;
+pub const LOAD_SLOT: usize = 0x006125F1;
+pub const POST_LOAD: usize = 0x008B5975;
+pub const SUB_6FC610: usize = 0x006FC610;
+pub const SAVE_SLOT: usize = 0x006134E9;
+pub const STEAM_SAVE: usize = 0x008B5CC1;
 pub const FAIL_SOUND: i32 = 2053;
+pub const NUM_SAVE_SLOTS: usize = 20;
+pub const MAGIC: &[u8] = b"IBOX";
+pub const UNMODDED_SAVE_SIZE: usize = 2337008; // this is the size of the 20 save slots plus, presumably, a few hundred bytes of header/metadata
+
+#[binrw]
+#[derive(Debug, Default)]
+struct ItemVec {
+    #[bw(calc = items.len() as u32)]
+    count: u32,
+    #[br(count = count)]
+    items: Vec<Item>,
+}
+
+impl ItemVec {
+    pub const fn new() -> Self {
+        Self { items: Vec::new() }
+    }
+}
 
 /// Game API and state information
 #[derive(Debug)]
@@ -44,8 +73,10 @@ pub struct Game {
     sub_522a20: Option<unsafe extern "fastcall" fn(*const c_void) -> i32>,
     prepare_inventory: Option<unsafe extern "fastcall" fn(*const c_void) -> bool>,
     sub_4db330: Option<unsafe extern "fastcall" fn(*const c_void) -> i32>,
+    get_remote_storage: *const unsafe extern "C" fn() -> *const *const usize,
     ptr_dcdf3c: *const *const c_void,
     ptr_dd0bd0: *const *const c_void,
+    saved_boxes: [ItemVec; NUM_SAVE_SLOTS],
 }
 
 impl Game {
@@ -61,8 +92,31 @@ impl Game {
             sub_522a20: None,
             prepare_inventory: None,
             sub_4db330: None,
+            get_remote_storage: std::ptr::null(),
             ptr_dd0bd0: std::ptr::null(),
             ptr_dcdf3c: std::ptr::null(),
+            saved_boxes: [
+                ItemVec::new(),
+                ItemVec::new(),
+                ItemVec::new(),
+                ItemVec::new(),
+                ItemVec::new(),
+                ItemVec::new(),
+                ItemVec::new(),
+                ItemVec::new(),
+                ItemVec::new(),
+                ItemVec::new(),
+                ItemVec::new(),
+                ItemVec::new(),
+                ItemVec::new(),
+                ItemVec::new(),
+                ItemVec::new(),
+                ItemVec::new(),
+                ItemVec::new(),
+                ItemVec::new(),
+                ItemVec::new(),
+                ItemVec::new(),
+            ],
         }
     }
 
@@ -73,6 +127,7 @@ impl Game {
         self.sub_522a20 = Some(std::mem::transmute(SUB_522A20));
         self.prepare_inventory = Some(std::mem::transmute(PREPARE_INVENTORY));
         self.sub_4db330 = Some(std::mem::transmute(SUB_4DB330));
+        self.get_remote_storage = STEAM_REMOTE_STORAGE as *const unsafe extern "C" fn() -> *const *const usize;
         self.ptr_dd0bd0 = PTR_DD0BD0 as *const *const c_void;
         self.ptr_dcdf3c = PTR_DCDF3C as *const *const c_void;
     }
@@ -118,5 +173,73 @@ impl Game {
 
     pub unsafe fn sub_4db330(&self, unknown: *const c_void) -> i32 {
         self.sub_4db330.unwrap()(unknown)
+    }
+
+    pub unsafe fn get_remote_storage(&self) -> *const *const usize {
+        (*self.get_remote_storage)()
+    }
+
+    pub fn save_to_slot(&mut self, items: &[Item], index: usize) {
+        self.saved_boxes[index].items = Vec::from(items);
+    }
+
+    pub fn save(&self, game_buf: &[u8], filename: *const u8) -> Result<()> {
+        let buf = Vec::with_capacity(game_buf.len() + MAGIC.len() + NUM_SAVE_SLOTS * std::mem::size_of::<u32>() + self.saved_boxes.iter().fold(0, |a, b| a + b.items.len() * std::mem::size_of::<Item>()));
+        let mut writer = Cursor::new(buf);
+        game_buf.write(&mut writer)?;
+        MAGIC.write(&mut writer)?;
+        self.saved_boxes.write_le(&mut writer)?;
+        let buf = writer.get_ref();
+
+        // pass our buffer to Steam with thiscall calling convention
+        let result: u8;
+        unsafe {
+            let remote_storage = self.get_remote_storage();
+
+            asm!(
+                "push {size}",
+                "push {buf}",
+                "push {name}",
+                "call {func}",
+                in("ecx") remote_storage,
+                func = in(reg) **remote_storage,
+                name = in(reg) filename,
+                buf = in(reg) buf.as_ptr(),
+                size = in(reg) buf.len(),
+                lateout("al") result,
+            );
+        }
+
+        match result {
+            0 => Err(anyhow!("Failed to save file")),
+            _ => Ok(()),
+        }
+    }
+
+    pub fn load_from_slot(&self, index: usize) -> Vec<Item> {
+        self.saved_boxes[index].items.clone()
+    }
+
+    pub fn clear_save(&mut self) {
+        for slot in &mut self.saved_boxes {
+            slot.items.clear();
+        }
+    }
+
+    pub fn load(&mut self, buf: &[u8]) -> Result<()> {
+        if buf.len() <= UNMODDED_SAVE_SIZE {
+            // this is the first time the mod has been used. clear out the boxes.
+            self.clear_save();
+            return Ok(());
+        }
+
+        let mut reader = Cursor::new(&buf[UNMODDED_SAVE_SIZE..]);
+        if reader.read_le::<[u8; 4]>()? != MAGIC {
+            // something weird has happened
+            return Err(anyhow!("Save file appears to be modded but box data was not correct"));
+        }
+        self.saved_boxes = reader.read_le()?;
+
+        Ok(())
     }
 }
