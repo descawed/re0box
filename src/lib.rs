@@ -3,6 +3,8 @@
 use std::ffi::c_void;
 use std::fs::File;
 use std::io::prelude::*;
+use std::path::Path;
+use std::str;
 
 use anyhow::Result;
 use windows::Win32::Foundation::{BOOL, HMODULE};
@@ -16,6 +18,17 @@ use game::*;
 
 mod inventory;
 use inventory::*;
+
+// we need static strings that always exist so we can give pointers to the game
+const MSG_DIR: &[u8] = b"nativePC\\arc\\message\\msg_";
+const MSG_FILES: [&[u8; 8]; 6] = [
+    b"eng_box\0",
+    b"fre_box\0",
+    b"ger_box\0",
+    b"ita_box\0",
+    b"jpn_box\0",
+    b"spa_box\0",
+];
 
 // I tried the naked-function crate, but it failed to compile for me, complaining about "unknown
 // directive" .pushsection. maybe it has something to do with the fact that I'm cross-compiling.
@@ -184,8 +197,51 @@ static mut SAVE_TRAMPOLINE: [u8; 11] = [
     0xE9, 0x00, 0x00, 0x00, 0x00, // jmp <fn>
 ];
 
+static mut MSG_TRAMPOLINE1: [u8; 20] = [
+    0xE8, 0x00, 0x00, 0x00, 0x00, // call <fn>
+    0x89, 0x04, 0x24, // mov [esp],eax
+    0x68, 0x00, 0x5E, 0xCB, 0x00, // push 0xcb5e00
+    0xB8, 0x53, 0x86, 0x40, 0x00, // mov eax,0x408653
+    0xFF, 0xE0, // jmp eax
+];
+
+static mut MSG_TRAMPOLINE2: [u8; 20] = [
+    0xE8, 0x00, 0x00, 0x00, 0x00, // call <fn>
+    0x89, 0x04, 0x24, // mov [esp],eax
+    0x68, 0x00, 0x5E, 0xCB, 0x00, // push 0xcb5e00
+    0xB8, 0x76, 0x64, 0x5D, 0x00, // mov eax,0x5d6476
+    0xFF, 0xE0, // jmp eax
+];
+
+static mut MSG_TRAMPOLINE3: [u8; 20] = [
+    0xE8, 0x00, 0x00, 0x00, 0x00, // call <fn>
+    0x89, 0x04, 0x24, // mov [esp],eax
+    0x68, 0x00, 0x5E, 0xCB, 0x00, // push 0xcb5e00
+    0xB8, 0xE6, 0x67, 0x5D, 0x00, // mov eax,0x5d67e6
+    0xFF, 0xE0, // jmp eax
+];
+
 static mut BOX: ItemBox = ItemBox::new();
 static mut GAME: Game = Game::new();
+
+unsafe extern "C" fn load_msg_file(lang: *const u8) -> *const u8 {
+    let lang_slice = std::slice::from_raw_parts(lang, 3);
+    if let Some(override_file) = MSG_FILES.iter().find(|f| f.starts_with(lang_slice)) {
+        // make sure the file actually exists before we tell the game to load it
+        let mut raw_path = [0u8; 36];
+        raw_path[..MSG_DIR.len()].copy_from_slice(MSG_DIR);
+        let end = MSG_DIR.len() + override_file.len() - 1;
+        raw_path[MSG_DIR.len()..end].copy_from_slice(&override_file[..override_file.len()-1]); // -1 to skip null
+        raw_path[end..].copy_from_slice(b".arc");
+
+        let path = Path::new(str::from_utf8_unchecked(&raw_path));
+        if path.exists() {
+            return (*override_file).as_ptr();
+        }
+    }
+
+    lang
+}
 
 unsafe extern "C" fn save_slot(index: usize) {
     GAME.save_to_slot(BOX.get_contents(), index);
@@ -326,6 +382,19 @@ fn main(reason: u32) -> Result<()> {
 
             patch(GET_PARTNER_BAG, &bag_jump)?;
             patch(GET_PARTNER_BAG_ORG, &bag_call)?;
+
+            // override the msg file the game looks for so we don't have to replace the originals
+            let msg_jump1 = jmp(MSG_LOAD1, MSG_TRAMPOLINE1.as_ptr() as usize);
+            set_trampoline(&mut MSG_TRAMPOLINE1, 0, load_msg_file as usize)?;
+            patch(MSG_LOAD1, &msg_jump1)?;
+
+            let msg_jump2 = jmp(MSG_LOAD2, MSG_TRAMPOLINE2.as_ptr() as usize);
+            set_trampoline(&mut MSG_TRAMPOLINE2, 0, load_msg_file as usize)?;
+            patch(MSG_LOAD2, &msg_jump2)?;
+
+            let msg_jump3 = jmp(MSG_LOAD3, MSG_TRAMPOLINE3.as_ptr() as usize);
+            set_trampoline(&mut MSG_TRAMPOLINE3, 0, load_msg_file as usize)?;
+            patch(MSG_LOAD3, &msg_jump3)?;
 
             // when trying to scroll up past the top inventory row, scroll the box view
             let scroll_up_jump = jl(SCROLL_UP_CHECK, SCROLL_UP_TRAMPOLINE.as_ptr() as usize);

@@ -40,6 +40,9 @@ pub const POST_LOAD: usize = 0x008B5975;
 pub const SUB_6FC610: usize = 0x006FC610;
 pub const SAVE_SLOT: usize = 0x006134E9;
 pub const STEAM_SAVE: usize = 0x008B5CC1;
+pub const MSG_LOAD1: usize = 0x0040864E;
+pub const MSG_LOAD2: usize = 0x005D6471;
+pub const MSG_LOAD3: usize = 0x005D67E1;
 pub const FAIL_SOUND: i32 = 2053;
 pub const NUM_SAVE_SLOTS: usize = 20;
 pub const MAGIC: &[u8] = b"IBOX";
@@ -65,6 +68,7 @@ impl ItemVec {
 pub struct Game {
     pub user_had_ink_ribbon: bool,
     pub should_open_box: bool,
+    pub is_mod_enabled: bool,
     box_partner: *const c_void,
     original_exchange_state: i8,
     draw_bags: Option<unsafe extern "fastcall" fn(*const c_void) -> *mut Bag>,
@@ -84,6 +88,7 @@ impl Game {
         Self {
             user_had_ink_ribbon: false,
             should_open_box: false,
+            is_mod_enabled: true,
             box_partner: std::ptr::null(),
             original_exchange_state: 0,
             draw_bags: None,
