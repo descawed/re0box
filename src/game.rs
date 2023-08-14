@@ -26,6 +26,8 @@ pub const INVENTORY_MENU_CLOSE: usize = 0x005D8983;
 pub const INVENTORY_CHANGE_CHARACTER: usize = 0x005E2BCA;
 pub const INVENTORY_OPEN_ANIMATION: usize = 0x005E1B4F;
 pub const PLAY_MENU_ANIMATION: usize = 0x005DBDF0;
+pub const EXCHANGE_SIZE_CHECK: usize = 0x005E3E94;
+pub const SUB_4DB330: usize = 0x004DB330;
 pub const PTR_DD0BD0: usize = 0x00DD0BD0;
 pub const FAIL_SOUND: i32 = 2053;
 
@@ -41,6 +43,7 @@ pub struct Game {
     get_partner_character: Option<unsafe extern "fastcall" fn(*const c_void) -> *const c_void>,
     sub_522a20: Option<unsafe extern "fastcall" fn(*const c_void) -> i32>,
     prepare_inventory: Option<unsafe extern "fastcall" fn(*const c_void) -> bool>,
+    sub_4db330: Option<unsafe extern "fastcall" fn(*const c_void) -> i32>,
     ptr_dcdf3c: *const *const c_void,
     ptr_dd0bd0: *const *const c_void,
 }
@@ -57,6 +60,7 @@ impl Game {
             get_partner_character: None,
             sub_522a20: None,
             prepare_inventory: None,
+            sub_4db330: None,
             ptr_dd0bd0: std::ptr::null(),
             ptr_dcdf3c: std::ptr::null(),
         }
@@ -68,6 +72,7 @@ impl Game {
         self.get_partner_character = Some(std::mem::transmute(GET_PARTNER_CHARACTER));
         self.sub_522a20 = Some(std::mem::transmute(SUB_522A20));
         self.prepare_inventory = Some(std::mem::transmute(PREPARE_INVENTORY));
+        self.sub_4db330 = Some(std::mem::transmute(SUB_4DB330));
         self.ptr_dd0bd0 = PTR_DD0BD0 as *const *const c_void;
         self.ptr_dcdf3c = PTR_DCDF3C as *const *const c_void;
     }
@@ -109,5 +114,9 @@ impl Game {
 
     pub unsafe fn prepare_inventory(&self) -> bool {
         self.prepare_inventory.unwrap()(*self.ptr_dd0bd0)
+    }
+
+    pub unsafe fn sub_4db330(&self, unknown: *const c_void) -> i32 {
+        self.sub_4db330.unwrap()(unknown)
     }
 }

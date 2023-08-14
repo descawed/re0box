@@ -137,8 +137,36 @@ static mut OPEN_ANIMATION_TRAMPOLINE: [u8; 28] = [
     0xE9, 0x00, 0x00, 0x00, 0x00, // jmp PlayMenuAnimation
 ];
 
+static mut SIZE_CHECK_TRAMPOLINE: [u8; 16] = [
+    0xFF, 0x74, 0x24, 0x20, // push [esp+0x20]
+    0x51, // push ecx
+    0x57, // push edi
+    0x68, 0x99, 0x3E, 0x5E, 0x00, // push 0x5e3e99
+    0xE9, 0x00, 0x00, 0x00, 0x00, // jmp <fn>
+];
+
 static mut BOX: ItemBox = ItemBox::new();
 static mut GAME: Game = Game::new();
+
+// we use stdcall here because we're returning directly to the game, so we need to clean the stack
+unsafe extern "system" fn make_room_for_double(
+    menu: *const c_void,
+    unknown: *const c_void,
+    item_size: usize,
+) -> i32 {
+    if BOX.is_open() {
+        if item_size > 1 {
+            let index = *(menu.offset(0x2bc) as *const usize);
+            BOX.make_room_for_double(index);
+        }
+
+        // we just always say we have enough space
+        2
+    } else {
+        // if the box isn't open, just forward the call to the original function
+        GAME.sub_4db330(unknown)
+    }
+}
 
 unsafe extern "fastcall" fn show_partner_inventory(menu: *mut c_void) -> bool {
     if BOX.is_open() {
@@ -298,26 +326,54 @@ fn main(reason: u32) -> Result<()> {
             patch(TYPEWRITER_PHASE_SET, &box_jump)?;
 
             // make the menu show the box to start with instead of the partner control panel
-            let view_jump = jmp(INVENTORY_OPEN_ANIMATION, OPEN_ANIMATION_TRAMPOLINE.as_ptr() as usize);
-            set_trampoline(&mut OPEN_ANIMATION_TRAMPOLINE, 1, show_partner_inventory as usize)?;
+            let view_jump = jmp(
+                INVENTORY_OPEN_ANIMATION,
+                OPEN_ANIMATION_TRAMPOLINE.as_ptr() as usize,
+            );
+            set_trampoline(
+                &mut OPEN_ANIMATION_TRAMPOLINE,
+                1,
+                show_partner_inventory as usize,
+            )?;
             set_trampoline(&mut OPEN_ANIMATION_TRAMPOLINE, 23, PLAY_MENU_ANIMATION)?;
             patch(INVENTORY_OPEN_ANIMATION, &view_jump)?;
 
             // always enable exchanging when a character first opens the box
-            let init_jump = jmp(INVENTORY_MENU_START, INVENTORY_START_TRAMPOLINE.as_ptr() as usize);
+            let init_jump = jmp(
+                INVENTORY_MENU_START,
+                INVENTORY_START_TRAMPOLINE.as_ptr() as usize,
+            );
             set_trampoline(&mut INVENTORY_START_TRAMPOLINE, 2, menu_setup as usize)?;
             patch(INVENTORY_MENU_START, &init_jump)?;
 
             // handle enabling and disabling exchanging when the character changes
-            let character_jump = jmp(INVENTORY_CHANGE_CHARACTER, CHANGE_CHARACTER_TRAMPOLINE.as_ptr() as usize);
-            set_trampoline(&mut CHANGE_CHARACTER_TRAMPOLINE, 2, change_character as usize)?;
+            let character_jump = jmp(
+                INVENTORY_CHANGE_CHARACTER,
+                CHANGE_CHARACTER_TRAMPOLINE.as_ptr() as usize,
+            );
+            set_trampoline(
+                &mut CHANGE_CHARACTER_TRAMPOLINE,
+                2,
+                change_character as usize,
+            )?;
             patch(INVENTORY_CHANGE_CHARACTER, &character_jump)?;
 
             // close the box after closing the inventory
-            let close_jump = jmp(INVENTORY_MENU_CLOSE, INVENTORY_CLOSE_TRAMPOLINE.as_ptr() as usize);
+            let close_jump = jmp(
+                INVENTORY_MENU_CLOSE,
+                INVENTORY_CLOSE_TRAMPOLINE.as_ptr() as usize,
+            );
             set_trampoline(&mut INVENTORY_CLOSE_TRAMPOLINE, 1, close_box as usize)?;
             patch(INVENTORY_MENU_CLOSE, &close_jump)?;
 
+            // make room in the box if the player tries to swap a two-slot item into a full view
+            let double_jump = jmp(EXCHANGE_SIZE_CHECK, SIZE_CHECK_TRAMPOLINE.as_ptr() as usize);
+            set_trampoline(
+                &mut SIZE_CHECK_TRAMPOLINE,
+                11,
+                make_room_for_double as usize,
+            )?;
+            patch(EXCHANGE_SIZE_CHECK, &double_jump)?;
         }
     }
 

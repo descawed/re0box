@@ -50,6 +50,24 @@ impl Bag {
         // if there's an empty slot followed by a non-empty slot, we're not organized
         || self.items.iter().skip_while(|i| !i.is_empty()).any(|i| !i.is_empty()))
     }
+
+    pub fn can_exchange_double(&self, index: usize) -> bool {
+        let num_empty: usize = self
+            .items
+            .iter()
+            .map(|i| if i.is_empty() { 1 } else { 0 })
+            .sum();
+        // we can exchange a two-slot item if we have at least two free slots, or we have one free
+        // slot and the player is exchanging with another item, or the player is exchanging with
+        // a two-slot item
+        num_empty >= 2
+            || (num_empty == 1 && !self.items[index].is_empty())
+            || self
+                .items
+                .get(index + 1)
+                .map(|i| i.id == SLOT_TWO)
+                .unwrap_or(false)
+    }
 }
 
 #[derive(Debug)]
@@ -140,6 +158,20 @@ impl ItemBox {
                 } else {
                     break;
                 }
+            }
+            self.update_view();
+        }
+    }
+
+    pub fn make_room_for_double(&mut self, index: usize) {
+        // we only need to do something if we don't already have room
+        if !self.view.can_exchange_double(index) {
+            let box_index = index + self.index;
+            self.items.insert(box_index + 1, Item::empty());
+            if index == BAG_SIZE - 1 {
+                // if we're trying to exchange with the last slot, shift the previous item outside
+                // the view
+                self.items.swap(box_index - 1, box_index + 1);
             }
             self.update_view();
         }
