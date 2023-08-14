@@ -4,6 +4,9 @@ version = "0.1.0"
 authors = ["descawed <re0box@descawed.com>"]
 edition = "2021"
 description = "An item box mod for Resident Evil 0"
+readme = "README.md"
+homepage = "https://github.com/descawed/re0box"
+repository = "https://github.com/descawed/re0box"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
