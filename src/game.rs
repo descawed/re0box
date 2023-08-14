@@ -68,7 +68,7 @@ impl ItemVec {
 pub struct Game {
     pub user_had_ink_ribbon: bool,
     pub should_open_box: bool,
-    pub is_mod_enabled: bool,
+    is_mod_enabled: bool,
     box_partner: *const c_void,
     original_exchange_state: i8,
     draw_bags: Option<unsafe extern "fastcall" fn(*const c_void) -> *mut Bag>,
@@ -125,14 +125,16 @@ impl Game {
         }
     }
 
-    pub unsafe fn init(&mut self) {
+    pub unsafe fn init(&mut self, is_mod_enabled: bool) {
+        self.is_mod_enabled = is_mod_enabled;
         self.draw_bags = Some(std::mem::transmute(DRAW_BAGS));
         self.get_character_bag = Some(std::mem::transmute(GET_CHARACTER_BAG));
         self.get_partner_character = Some(std::mem::transmute(GET_PARTNER_CHARACTER));
         self.sub_522a20 = Some(std::mem::transmute(SUB_522A20));
         self.prepare_inventory = Some(std::mem::transmute(PREPARE_INVENTORY));
         self.sub_4db330 = Some(std::mem::transmute(SUB_4DB330));
-        self.get_remote_storage = STEAM_REMOTE_STORAGE as *const unsafe extern "C" fn() -> *const *const usize;
+        self.get_remote_storage =
+            STEAM_REMOTE_STORAGE as *const unsafe extern "C" fn() -> *const *const usize;
         self.ptr_dd0bd0 = PTR_DD0BD0 as *const *const c_void;
         self.ptr_dcdf3c = PTR_DCDF3C as *const *const c_void;
     }
@@ -185,11 +187,24 @@ impl Game {
     }
 
     pub fn save_to_slot(&mut self, items: &[Item], index: usize) {
-        self.saved_boxes[index].items = Vec::from(items);
+        self.saved_boxes[index].items = Vec::from(if self.is_mod_enabled {
+            items
+        } else {
+            // if the mod is disabled, clear the box in this slot
+            &[]
+        });
     }
 
     pub fn save(&self, game_buf: &[u8], filename: *const u8) -> Result<()> {
-        let buf = Vec::with_capacity(game_buf.len() + MAGIC.len() + NUM_SAVE_SLOTS * std::mem::size_of::<u32>() + self.saved_boxes.iter().fold(0, |a, b| a + b.items.len() * std::mem::size_of::<Item>()));
+        let buf = Vec::with_capacity(
+            game_buf.len()
+                + MAGIC.len()
+                + NUM_SAVE_SLOTS * std::mem::size_of::<u32>()
+                + self
+                    .saved_boxes
+                    .iter()
+                    .fold(0, |a, b| a + b.items.len() * std::mem::size_of::<Item>()),
+        );
         let mut writer = Cursor::new(buf);
         game_buf.write(&mut writer)?;
         MAGIC.write(&mut writer)?;
@@ -241,7 +256,9 @@ impl Game {
         let mut reader = Cursor::new(&buf[UNMODDED_SAVE_SIZE..]);
         if reader.read_le::<[u8; 4]>()? != MAGIC {
             // something weird has happened
-            return Err(anyhow!("Save file appears to be modded but box data was not correct"));
+            return Err(anyhow!(
+                "Save file appears to be modded but box data was not correct"
+            ));
         }
         self.saved_boxes = reader.read_le()?;
 

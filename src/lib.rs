@@ -1,12 +1,11 @@
 #![cfg(windows)]
 
 use std::ffi::c_void;
-use std::fs::File;
-use std::io::prelude::*;
 use std::path::Path;
 use std::str;
 
 use anyhow::Result;
+use configparser::ini::Ini;
 use windows::Win32::Foundation::{BOOL, HMODULE};
 use windows::Win32::System::SystemServices::DLL_PROCESS_ATTACH;
 
@@ -19,9 +18,11 @@ use game::*;
 mod inventory;
 use inventory::*;
 
-// we need static strings that always exist so we can give pointers to the game
 const MSG_DIR: &[u8] = b"nativePC\\arc\\message\\msg_";
-const MSG_FILES: [&[u8; 8]; 6] = [
+// we need static strings that always exist so we can give pointers to the game
+const MSG_FILES: [&[u8; 8]; 8] = [
+    b"chS_box\0",
+    b"chT_box\0",
     b"eng_box\0",
     b"fre_box\0",
     b"ger_box\0",
@@ -231,7 +232,7 @@ unsafe extern "C" fn load_msg_file(lang: *const u8) -> *const u8 {
         let mut raw_path = [0u8; 36];
         raw_path[..MSG_DIR.len()].copy_from_slice(MSG_DIR);
         let end = MSG_DIR.len() + override_file.len() - 1;
-        raw_path[MSG_DIR.len()..end].copy_from_slice(&override_file[..override_file.len()-1]); // -1 to skip null
+        raw_path[MSG_DIR.len()..end].copy_from_slice(&override_file[..override_file.len() - 1]); // -1 to skip null
         raw_path[end..].copy_from_slice(b".arc");
 
         let path = Path::new(str::from_utf8_unchecked(&raw_path));
@@ -248,7 +249,8 @@ unsafe extern "C" fn save_slot(index: usize) {
 }
 
 unsafe extern "stdcall" fn save_data(filename: *const u8, buf: *const u8, size: usize) -> bool {
-    GAME.save(std::slice::from_raw_parts(buf, size), filename).is_ok()
+    GAME.save(std::slice::from_raw_parts(buf, size), filename)
+        .is_ok()
 }
 
 unsafe extern "C" fn load_slot(index: usize) {
@@ -371,134 +373,154 @@ unsafe extern "fastcall" fn get_partner_bag(unknown: *mut c_void) -> *mut Bag {
 
 fn main(reason: u32) -> Result<()> {
     if reason == DLL_PROCESS_ATTACH {
-        let mut file = File::create("test.txt")?;
-        file.write_all(b"DLL attached\n")?;
+        let mut config = Ini::new();
+        // we don't care if the config fails to load, we'll just use the defaults
+        let _ = config.load("re0box.ini");
+        let is_enabled = config
+            .getboolcoerce("Enable", "Mod")
+            .ok()
+            .flatten()
+            .unwrap_or(true);
+        let is_leave_allowed = config
+            .getboolcoerce("Enable", "Leave")
+            .ok()
+            .flatten()
+            .unwrap_or(false);
 
-        // when the game tries to display the partner's inventory, show the box instead if it's open
-        let bag_jump = jmp(GET_PARTNER_BAG, get_partner_bag as usize);
-        let bag_call = call(GET_PARTNER_BAG_ORG, get_box_if_open as usize);
         unsafe {
-            GAME.init();
+            GAME.init(is_enabled);
 
-            patch(GET_PARTNER_BAG, &bag_jump)?;
-            patch(GET_PARTNER_BAG_ORG, &bag_call)?;
+            if is_enabled {
+                // when the game tries to display the partner's inventory, show the box instead if it's open
+                let bag_jump = jmp(GET_PARTNER_BAG, get_partner_bag as usize);
+                patch(GET_PARTNER_BAG, &bag_jump)?;
+                let bag_call = call(GET_PARTNER_BAG_ORG, get_box_if_open as usize);
+                patch(GET_PARTNER_BAG_ORG, &bag_call)?;
 
-            // override the msg file the game looks for so we don't have to replace the originals
-            let msg_jump1 = jmp(MSG_LOAD1, MSG_TRAMPOLINE1.as_ptr() as usize);
-            set_trampoline(&mut MSG_TRAMPOLINE1, 0, load_msg_file as usize)?;
-            patch(MSG_LOAD1, &msg_jump1)?;
+                // override the msg file the game looks for so we don't have to replace the originals
+                let msg_jump1 = jmp(MSG_LOAD1, MSG_TRAMPOLINE1.as_ptr() as usize);
+                set_trampoline(&mut MSG_TRAMPOLINE1, 0, load_msg_file as usize)?;
+                patch(MSG_LOAD1, &msg_jump1)?;
 
-            let msg_jump2 = jmp(MSG_LOAD2, MSG_TRAMPOLINE2.as_ptr() as usize);
-            set_trampoline(&mut MSG_TRAMPOLINE2, 0, load_msg_file as usize)?;
-            patch(MSG_LOAD2, &msg_jump2)?;
+                let msg_jump2 = jmp(MSG_LOAD2, MSG_TRAMPOLINE2.as_ptr() as usize);
+                set_trampoline(&mut MSG_TRAMPOLINE2, 0, load_msg_file as usize)?;
+                patch(MSG_LOAD2, &msg_jump2)?;
 
-            let msg_jump3 = jmp(MSG_LOAD3, MSG_TRAMPOLINE3.as_ptr() as usize);
-            set_trampoline(&mut MSG_TRAMPOLINE3, 0, load_msg_file as usize)?;
-            patch(MSG_LOAD3, &msg_jump3)?;
+                let msg_jump3 = jmp(MSG_LOAD3, MSG_TRAMPOLINE3.as_ptr() as usize);
+                set_trampoline(&mut MSG_TRAMPOLINE3, 0, load_msg_file as usize)?;
+                patch(MSG_LOAD3, &msg_jump3)?;
 
-            // when trying to scroll up past the top inventory row, scroll the box view
-            let scroll_up_jump = jl(SCROLL_UP_CHECK, SCROLL_UP_TRAMPOLINE.as_ptr() as usize);
-            set_trampoline(&mut SCROLL_UP_TRAMPOLINE, 4, scroll as usize)?;
-            patch(SCROLL_UP_CHECK, &scroll_up_jump)?;
+                // when trying to scroll up past the top inventory row, scroll the box view
+                let scroll_up_jump = jl(SCROLL_UP_CHECK, SCROLL_UP_TRAMPOLINE.as_ptr() as usize);
+                set_trampoline(&mut SCROLL_UP_TRAMPOLINE, 4, scroll as usize)?;
+                patch(SCROLL_UP_CHECK, &scroll_up_jump)?;
 
-            // when trying to scroll down past the last inventory row, scroll the box view
-            let scroll_down_jump = jge(SCROLL_DOWN_CHECK, SCROLL_DOWN_TRAMPOLINE.as_ptr() as usize);
-            set_trampoline(&mut SCROLL_DOWN_TRAMPOLINE, 4, scroll as usize)?;
-            patch(SCROLL_DOWN_CHECK, &scroll_down_jump)?;
+                // when trying to scroll down past the last inventory row, scroll the box view
+                let scroll_down_jump =
+                    jge(SCROLL_DOWN_CHECK, SCROLL_DOWN_TRAMPOLINE.as_ptr() as usize);
+                set_trampoline(&mut SCROLL_DOWN_TRAMPOLINE, 4, scroll as usize)?;
+                patch(SCROLL_DOWN_CHECK, &scroll_down_jump)?;
 
-            // after the view is organized, copy its contents back into the box
-            let organize_jump1 = jmp(ORGANIZE_END1, ORGANIZE_TRAMPOLINE.as_ptr() as usize);
-            let organize_jump2 = jmp(ORGANIZE_END2, ORGANIZE_TRAMPOLINE.as_ptr() as usize);
-            set_trampoline(&mut ORGANIZE_TRAMPOLINE, 1, update_box as usize)?;
-            patch(ORGANIZE_END1, &organize_jump1)?;
-            patch(ORGANIZE_END2, &organize_jump2)?;
+                // after the view is organized, copy its contents back into the box
+                let organize_jump1 = jmp(ORGANIZE_END1, ORGANIZE_TRAMPOLINE.as_ptr() as usize);
+                let organize_jump2 = jmp(ORGANIZE_END2, ORGANIZE_TRAMPOLINE.as_ptr() as usize);
+                set_trampoline(&mut ORGANIZE_TRAMPOLINE, 1, update_box as usize)?;
+                patch(ORGANIZE_END1, &organize_jump1)?;
+                patch(ORGANIZE_END2, &organize_jump2)?;
 
-            // disable leaving items since that would be OP when combined with the item box
-            patch(LEAVE_SOUND_ARG, &FAIL_SOUND.to_le_bytes())?;
-            patch(LEAVE_MENU_STATE, &[0xEB, 0x08])?; // short jump to skip the code that switches to the "leaving item" menu state
+                if !is_leave_allowed {
+                    // disable leaving items since that would be OP when combined with the item box
+                    patch(LEAVE_SOUND_ARG, &FAIL_SOUND.to_le_bytes())?;
+                    patch(LEAVE_MENU_STATE, &[0xEB, 0x08])?; // short jump to skip the code that switches to the "leaving item" menu state
+                }
 
-            // handle the extra options when activating the typewriter
-            let has_ink_jump = jmp(HAS_INK_RIBBON, HAS_INK_RIBBON_TRAMPOLINE.as_ptr() as usize);
-            set_trampoline(
-                &mut HAS_INK_RIBBON_TRAMPOLINE,
-                3,
-                track_typewriter_message as usize,
-            )?;
-            patch(HAS_INK_RIBBON, &has_ink_jump)?;
+                // handle the extra options when activating the typewriter
+                let has_ink_jump = jmp(HAS_INK_RIBBON, HAS_INK_RIBBON_TRAMPOLINE.as_ptr() as usize);
+                set_trampoline(
+                    &mut HAS_INK_RIBBON_TRAMPOLINE,
+                    3,
+                    track_typewriter_message as usize,
+                )?;
+                patch(HAS_INK_RIBBON, &has_ink_jump)?;
 
-            let no_ink_jump = jmp(NO_INK_RIBBON, NO_INK_RIBBON_TRAMPOLINE.as_ptr() as usize);
-            set_trampoline(
-                &mut NO_INK_RIBBON_TRAMPOLINE,
-                3,
-                track_typewriter_message as usize,
-            )?;
-            patch(NO_INK_RIBBON, &no_ink_jump)?;
+                let no_ink_jump = jmp(NO_INK_RIBBON, NO_INK_RIBBON_TRAMPOLINE.as_ptr() as usize);
+                set_trampoline(
+                    &mut NO_INK_RIBBON_TRAMPOLINE,
+                    3,
+                    track_typewriter_message as usize,
+                )?;
+                patch(NO_INK_RIBBON, &no_ink_jump)?;
 
-            let choice_jump = jmp(
-                TYPEWRITER_CHOICE_CHECK,
-                TYPEWRITER_CHOICE_TRAMPOLINE.as_ptr() as usize,
-            );
-            set_trampoline(
-                &mut TYPEWRITER_CHOICE_TRAMPOLINE,
-                6,
-                check_typewriter_choice as usize,
-            )?;
-            patch(TYPEWRITER_CHOICE_CHECK, &choice_jump)?;
+                let choice_jump = jmp(
+                    TYPEWRITER_CHOICE_CHECK,
+                    TYPEWRITER_CHOICE_TRAMPOLINE.as_ptr() as usize,
+                );
+                set_trampoline(
+                    &mut TYPEWRITER_CHOICE_TRAMPOLINE,
+                    6,
+                    check_typewriter_choice as usize,
+                )?;
+                patch(TYPEWRITER_CHOICE_CHECK, &choice_jump)?;
 
-            let box_jump = jmp(TYPEWRITER_PHASE_SET, OPEN_BOX_TRAMPOLINE.as_ptr() as usize);
-            set_trampoline(&mut OPEN_BOX_TRAMPOLINE, 1, open_box as usize)?;
-            set_trampoline(&mut OPEN_BOX_TRAMPOLINE, 19, SET_ROOM_PHASE)?;
-            patch(TYPEWRITER_PHASE_SET, &box_jump)?;
+                let box_jump = jmp(TYPEWRITER_PHASE_SET, OPEN_BOX_TRAMPOLINE.as_ptr() as usize);
+                set_trampoline(&mut OPEN_BOX_TRAMPOLINE, 1, open_box as usize)?;
+                set_trampoline(&mut OPEN_BOX_TRAMPOLINE, 19, SET_ROOM_PHASE)?;
+                patch(TYPEWRITER_PHASE_SET, &box_jump)?;
 
-            // make the menu show the box to start with instead of the partner control panel
-            let view_jump = jmp(
-                INVENTORY_OPEN_ANIMATION,
-                OPEN_ANIMATION_TRAMPOLINE.as_ptr() as usize,
-            );
-            set_trampoline(
-                &mut OPEN_ANIMATION_TRAMPOLINE,
-                1,
-                show_partner_inventory as usize,
-            )?;
-            set_trampoline(&mut OPEN_ANIMATION_TRAMPOLINE, 23, PLAY_MENU_ANIMATION)?;
-            patch(INVENTORY_OPEN_ANIMATION, &view_jump)?;
+                // make the menu show the box to start with instead of the partner control panel
+                let view_jump = jmp(
+                    INVENTORY_OPEN_ANIMATION,
+                    OPEN_ANIMATION_TRAMPOLINE.as_ptr() as usize,
+                );
+                set_trampoline(
+                    &mut OPEN_ANIMATION_TRAMPOLINE,
+                    1,
+                    show_partner_inventory as usize,
+                )?;
+                set_trampoline(&mut OPEN_ANIMATION_TRAMPOLINE, 23, PLAY_MENU_ANIMATION)?;
+                patch(INVENTORY_OPEN_ANIMATION, &view_jump)?;
 
-            // always enable exchanging when a character first opens the box
-            let init_jump = jmp(
-                INVENTORY_MENU_START,
-                INVENTORY_START_TRAMPOLINE.as_ptr() as usize,
-            );
-            set_trampoline(&mut INVENTORY_START_TRAMPOLINE, 2, menu_setup as usize)?;
-            patch(INVENTORY_MENU_START, &init_jump)?;
+                // always enable exchanging when a character first opens the box
+                let init_jump = jmp(
+                    INVENTORY_MENU_START,
+                    INVENTORY_START_TRAMPOLINE.as_ptr() as usize,
+                );
+                set_trampoline(&mut INVENTORY_START_TRAMPOLINE, 2, menu_setup as usize)?;
+                patch(INVENTORY_MENU_START, &init_jump)?;
 
-            // handle enabling and disabling exchanging when the character changes
-            let character_jump = jmp(
-                INVENTORY_CHANGE_CHARACTER,
-                CHANGE_CHARACTER_TRAMPOLINE.as_ptr() as usize,
-            );
-            set_trampoline(
-                &mut CHANGE_CHARACTER_TRAMPOLINE,
-                2,
-                change_character as usize,
-            )?;
-            patch(INVENTORY_CHANGE_CHARACTER, &character_jump)?;
+                // handle enabling and disabling exchanging when the character changes
+                let character_jump = jmp(
+                    INVENTORY_CHANGE_CHARACTER,
+                    CHANGE_CHARACTER_TRAMPOLINE.as_ptr() as usize,
+                );
+                set_trampoline(
+                    &mut CHANGE_CHARACTER_TRAMPOLINE,
+                    2,
+                    change_character as usize,
+                )?;
+                patch(INVENTORY_CHANGE_CHARACTER, &character_jump)?;
 
-            // close the box after closing the inventory
-            let close_jump = jmp(
-                INVENTORY_MENU_CLOSE,
-                INVENTORY_CLOSE_TRAMPOLINE.as_ptr() as usize,
-            );
-            set_trampoline(&mut INVENTORY_CLOSE_TRAMPOLINE, 1, close_box as usize)?;
-            patch(INVENTORY_MENU_CLOSE, &close_jump)?;
+                // close the box after closing the inventory
+                let close_jump = jmp(
+                    INVENTORY_MENU_CLOSE,
+                    INVENTORY_CLOSE_TRAMPOLINE.as_ptr() as usize,
+                );
+                set_trampoline(&mut INVENTORY_CLOSE_TRAMPOLINE, 1, close_box as usize)?;
+                patch(INVENTORY_MENU_CLOSE, &close_jump)?;
 
-            // make room in the box if the player tries to swap a two-slot item into a full view
-            let double_jump = jmp(EXCHANGE_SIZE_CHECK, SIZE_CHECK_TRAMPOLINE.as_ptr() as usize);
-            set_trampoline(
-                &mut SIZE_CHECK_TRAMPOLINE,
-                11,
-                make_room_for_double as usize,
-            )?;
-            patch(EXCHANGE_SIZE_CHECK, &double_jump)?;
+                // make room in the box if the player tries to swap a two-slot item into a full view
+                let double_jump = jmp(EXCHANGE_SIZE_CHECK, SIZE_CHECK_TRAMPOLINE.as_ptr() as usize);
+                set_trampoline(
+                    &mut SIZE_CHECK_TRAMPOLINE,
+                    11,
+                    make_room_for_double as usize,
+                )?;
+                patch(EXCHANGE_SIZE_CHECK, &double_jump)?;
+            }
+
+            // even if the mod is disabled, we still install our load and save handlers to prevent
+            // the game from blowing away saved boxes, and also so we can clear the box on any save
+            // slots that are saved to while the mod is inactive
 
             // load data
             let load_jump = jmp(POST_LOAD, LOAD_TRAMPOLINE.as_ptr() as usize);
