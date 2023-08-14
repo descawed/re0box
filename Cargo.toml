@@ -13,6 +13,10 @@ repository = "https://github.com/descawed/re0box"
 [lib]
 crate-type = ["cdylib"]
 
+[profile.release]
+strip = true
+lto = true
+
 [dependencies]
 anyhow = "1.0.*"
 binrw = "0.11.*"
