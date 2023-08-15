@@ -3,22 +3,21 @@ An item box mod for Resident Evil 0 HD on PC.
 
 ## Usage
 Download the latest release and unzip it to your Resident Evil 0 folder (if you don't know where it is, right-click on
-the game in Steam and choose Manage > Browse local files). You can then launch the game with the mod by running the
-item_box_mod.bat file. You can access the box at any typewriter, even if you don't have an ink ribbon. When you select
-the option to open the box, the inventory menu will open, and you'll see the contents of the box on the left side of
-the screen where your partner's inventory is normally displayed. There's no visible scrollbar, but you can scroll by
-moving the cursor up from the top of the inventory or down from the bottom. Unlike some other games in the series, the
-box inventory is not circular, so you can't scroll past the top to get to the bottom or vice versa. By default, the
-Leave option in the inventory is disabled while the mod is active, but you can change that in the config file (see the
-Configuration section below).
+the game in Steam and choose Manage > Browse local files). It should then load automatically when you run the game.
+There are no physical item boxes; instead, you can access the box at any typewriter, even if you don't have an ink
+ribbon. When you select the option to open the box, the inventory menu will open, and you'll see the contents of the box
+on the left side of the screen where your partner's inventory is normally displayed. There's no visible scrollbar, but
+you can scroll by moving the cursor up from the top of the inventory or down from the bottom. Unlike some games in the
+series, the box inventory is not circular, so you can't scroll past the top to get to the bottom or vice versa. By
+default, the Leave option in the inventory is disabled while the mod is active, but you can change that in the config
+file (see the Configuration section below).
 
 ### Important Notes
 - Only the legal Steam version is supported.
-- If you run the game without the mod and save, all your item boxes in all your saves will be deleted. If you want to
-  play without the mod but still keep your item boxes in your other saves, you should open the config file (see
-  Configuration section below) and disable the mod by setting Mod=0, then continue to run the game with the
-  item_box_mod.bat file. That will disable all the mod's features but prevent the game from deleting your item boxes in
-  other saves.
+- If you uninstall the mod and save, all your item boxes in all your saves will be deleted. If you want to play without
+  the mod but still keep your item boxes in your other saves, you should open the config file (see Configuration section
+  below) and disable the mod by setting Mod=0. That will disable all the mod's features but prevent the game from
+  deleting your item boxes in other saves.
 - This mod supports all the languages that I can select in my version of the game, which are Simplified Chinese,
   Traditional Chinese, English, French, German, Italian, Japanese, and Spanish. However, only English and German have
   updated typewriter text that mentions the item box. If you're playing in one of the other languages I mentioned,
@@ -35,22 +34,32 @@ The mod comes with a configuration file called re0box.ini with a couple options.
 folder and you can open it with any text editor. Note that changes to this file won't take effect while the game is
 running; you'll need to restart the game for it to pick up any changes.
 - Mod: this controls whether the mod is enabled. When Mod=1 (which is the default), the mod is enabled. If you change it
-  to Mod=0, the mod is disabled. The reason you would want to do this, as opposed to just not running the game with the
-  mod, is what I mentioned in the Important Notes above: if you run the game without the mod and save, all your saved
-  item boxes will be wiped out. So if you want to do a playthrough without the mod but still keep your item boxes in
-  your saves from when you were using the mod, you should set Mod=0 in the config file and continue to run the game with
-  item_box_mod.bat.
+  to Mod=0, the mod is disabled.
 - Leave: this controls whether you're allowed to drop items (the "Leave" option in the inventory). The default is
   Leave=0, meaning you're not allowed to drop items, because I think that having both the item box and the ability to
   drop items is OP. But if you want both, you can change it to Leave=1, and then you'll be able to drop items and still
   access the item box.
 
+## Uninstall
+Delete dinput8.dll from the Resident Evil 0 folder. None of the other mod files will have any effect once that's gone,
+but if you want to purge everything, this is the full list of files added by the mod:
+- dinput8.dll
+- re0box.ini
+- re0box_readme.txt
+- nativePC\arc\message\msg_chS_box.arc
+- nativePC\arc\message\msg_chT_box.arc
+- nativePC\arc\message\msg_eng_box.arc
+- nativePC\arc\message\msg_fre_box.arc
+- nativePC\arc\message\msg_ger_box.arc
+- nativePC\arc\message\msg_ita_box.arc
+- nativePC\arc\message\msg_jpn_box.arc
+- nativePC\arc\message\msg_spa_box.arc
+
 ## Build
 This mod is written in Rust and works via DLL injection. The default target is i686-windows-pc-gnu because RE0 is a
-32-bit game and I'm cross-compiling from Linux, but I imagine the MSVC toolchain would also work. As long as Rust and
-the appropriate toolchain are installed, you should just be able to do a `cargo build`. The code doesn't include a way
-to inject the DLL; I've been using hasherezade's [dll_injector](https://github.com/hasherezade/dll_injector), which is
-what I bundle with the releases.
+32-bit game and I'm cross-compiling from Linux. I imagine the MSVC toolchain would also work, but you might need to
+change how the build script handles the .def file. As long as Rust and the appropriate toolchain are installed, you
+should just be able to do a `cargo build`.
 
 Aside from the DLL itself, we also have to edit the game's message files so typewriters prompt to use the box. These are
 found in nativePC\arc\message. There's one file for each language the game supports, named in the format
