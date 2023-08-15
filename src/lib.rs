@@ -250,9 +250,21 @@ static mut SHAFT_CHECK_TRAMPOLINE: [u8; 31] = [
     0xFF, 0xE0, // do_jmp: jmp eax
 ];
 
+static mut NEW_GAME_TRAMPOLINE: [u8; 17] = [
+    0xE8, 0x00, 0x00, 0x00, 0x00, // call <fn>
+    0xA1, 0x18, 0xE0, 0xDC, 0x00, // mov eax,[0xdce018a1]
+    0xB9, 0x75, 0x58, 0x40, 0x00, // mov ecx,0x405875
+    0xFF, 0xE1, // jmp ecx
+];
+
 static mut BOX: ItemBox = ItemBox::new();
 static mut GAME: Game = Game::new();
 static mut DINPUT8: DInput8 = DInput8::new();
+
+unsafe extern "C" fn new_game() {
+    // reset the box when starting a new game
+    BOX.set_contents(vec![]);
+}
 
 unsafe extern "fastcall" fn should_skip_shaft_check(partner: *const c_void) -> bool {
     // partner should never be null at this point of the code unless the box is open, but we'll
@@ -568,6 +580,11 @@ fn main(reason: u32) -> Result<()> {
                     should_skip_shaft_check as usize,
                 )?;
                 patch(SHAFT_CHECK, &shaft_jump)?;
+
+                // reset the box when starting a new game
+                let new_game_jump = jmp(NEW_GAME, NEW_GAME_TRAMPOLINE.as_ptr() as usize);
+                set_trampoline(&mut NEW_GAME_TRAMPOLINE, 0, new_game as usize)?;
+                patch(NEW_GAME, &new_game_jump)?;
             }
 
             // even if the mod is disabled, we still install our load and save handlers to prevent

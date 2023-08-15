@@ -44,6 +44,7 @@ pub const MSG_LOAD1: usize = 0x0040864E;
 pub const MSG_LOAD2: usize = 0x005D6471;
 pub const MSG_LOAD3: usize = 0x005D67E1;
 pub const SHAFT_CHECK: usize = 0x005E3D73;
+pub const NEW_GAME: usize = 0x00405870;
 pub const FAIL_SOUND: i32 = 2053;
 pub const NUM_SAVE_SLOTS: usize = 20;
 pub const MAGIC: &[u8] = b"IBOX";

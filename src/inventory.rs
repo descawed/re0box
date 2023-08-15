@@ -223,6 +223,11 @@ impl ItemBox {
     }
 
     pub fn set_contents(&mut self, items: Vec<Item>) {
+        // we need to close the box here because it can be left open if the player quits to the
+        // title screen with the inventory open
+        self.close();
         self.items = items;
+        self.index = 0;
+        self.update_view();
     }
 }
