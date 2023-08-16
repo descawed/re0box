@@ -6,11 +6,15 @@ use std::str;
 
 use anyhow::Result;
 use configparser::ini::Ini;
+use windows::core::{IUnknown, GUID, HRESULT};
 use windows::Win32::Foundation::{BOOL, HMODULE};
 use windows::Win32::System::SystemServices::DLL_PROCESS_ATTACH;
 
 mod patch;
 use patch::*;
+
+mod dinput8;
+use dinput8::*;
 
 mod game;
 use game::*;
@@ -18,7 +22,7 @@ use game::*;
 mod inventory;
 use inventory::*;
 
-const MSG_DIR: &[u8] = b"nativePC\\arc\\message\\msg_";
+const MSG_DIR: &[u8] = br"nativePC\arc\message\msg_";
 // we need static strings that always exist so we can give pointers to the game
 const MSG_FILES: [&[u8; 8]; 8] = [
     b"chS_box\0",
@@ -53,6 +57,17 @@ static mut SCROLL_DOWN_TRAMPOLINE: [u8; 20] = [
     0x61, // popad
     0xBE, 0x9E, 0x4D, 0x5E, 0, // mov esi, 0x5e4d9e
     0xFF, 0xE6, // jmp esi
+];
+
+static mut PARTNER_BAG_ORG_TRAMPOLINE: [u8; 26] = [
+    0xE8, 0x00, 0x00, 0x00, 0x00, // call <fn>
+    0xB9, 0x41, 0xC6, 0x4D, 0x00, // mov ecx,0x4dc641
+    0x85, 0xC0, // test eax,eax
+    0x74, 0x0A, // jz do_jmp
+    0x8D, 0x4C, 0x24, 0x08, // lea ecx,[esp+8]
+    0x51, // push ecx
+    0xB9, 0x3A, 0xC6, 0x4D, 0x00, // mov ecx,0x4dc63a
+    0xFF, 0xE1, // do_jmp: jmp ecx
 ];
 
 static mut ORGANIZE_TRAMPOLINE: [u8; 13] = [
@@ -222,8 +237,40 @@ static mut MSG_TRAMPOLINE3: [u8; 20] = [
     0xFF, 0xE0, // jmp eax
 ];
 
+static mut SHAFT_CHECK_TRAMPOLINE: [u8; 31] = [
+    0x60, // pushad
+    0xE8, 0x00, 0x00, 0x00, 0x00, // call <fn>
+    0x85, 0xC0, // test eax,eax
+    0x61, // popad
+    0x68, 0x78, 0x3D, 0x5E, 0x00, // push 0x5e3d78
+    0xB8, 0xC0, 0x63, 0x52, 0x00, // mov eax,0x5263c0
+    0x74, 0x08, // jz do_jmp
+    0x83, 0xC4, 0x04, // add esp,4
+    0xB8, 0x3D, 0x3E, 0x5E, 0x00, // mov eax,0x5e3e3d
+    0xFF, 0xE0, // do_jmp: jmp eax
+];
+
+static mut NEW_GAME_TRAMPOLINE: [u8; 17] = [
+    0xE8, 0x00, 0x00, 0x00, 0x00, // call <fn>
+    0xA1, 0x18, 0xE0, 0xDC, 0x00, // mov eax,[0xdce018]
+    0xB9, 0x75, 0x58, 0x40, 0x00, // mov ecx,0x405875
+    0xFF, 0xE1, // jmp ecx
+];
+
 static mut BOX: ItemBox = ItemBox::new();
 static mut GAME: Game = Game::new();
+static mut DINPUT8: DInput8 = DInput8::new();
+
+unsafe extern "C" fn new_game() {
+    // reset the box when starting a new game
+    BOX.set_contents(vec![]);
+}
+
+unsafe extern "fastcall" fn should_skip_shaft_check(partner: *const c_void) -> bool {
+    // partner should never be null at this point of the code unless the box is open, but we'll
+    // check both anyway just to be safe
+    BOX.is_open() || partner.is_null()
+}
 
 unsafe extern "C" fn load_msg_file(lang: *const u8) -> *const u8 {
     let lang_slice = std::slice::from_raw_parts(lang, 3);
@@ -345,11 +392,16 @@ unsafe fn update_box() {
     }
 }
 
-unsafe extern "fastcall" fn get_box_if_open(character: *const c_void) -> *mut Bag {
+unsafe extern "C" fn get_box_if_open() -> *mut Bag {
     if BOX.is_open() {
         BOX.view()
     } else {
-        GAME.get_character_bag(character)
+        let character = GAME.get_partner_character();
+        if character.is_null() {
+            std::ptr::null_mut()
+        } else {
+            GAME.get_character_bag(character)
+        }
     }
 }
 
@@ -394,8 +446,9 @@ fn main(reason: u32) -> Result<()> {
                 // when the game tries to display the partner's inventory, show the box instead if it's open
                 let bag_jump = jmp(GET_PARTNER_BAG, get_partner_bag as usize);
                 patch(GET_PARTNER_BAG, &bag_jump)?;
-                let bag_call = call(GET_PARTNER_BAG_ORG, get_box_if_open as usize);
-                patch(GET_PARTNER_BAG_ORG, &bag_call)?;
+                let org_jump = jmp(GET_PARTNER_BAG_ORG, PARTNER_BAG_ORG_TRAMPOLINE.as_ptr() as usize);
+                set_trampoline(&mut PARTNER_BAG_ORG_TRAMPOLINE, 0, get_box_if_open as usize)?;
+                patch(GET_PARTNER_BAG_ORG, &org_jump)?;
 
                 // override the msg file the game looks for so we don't have to replace the originals
                 let msg_jump1 = jmp(MSG_LOAD1, MSG_TRAMPOLINE1.as_ptr() as usize);
@@ -516,6 +569,22 @@ fn main(reason: u32) -> Result<()> {
                     make_room_for_double as usize,
                 )?;
                 patch(EXCHANGE_SIZE_CHECK, &double_jump)?;
+
+                // skip the check preventing giving both shaft keys to the same character when the box
+                // is open. aside from being undesirable, it also crashes the game when using the box
+                // without having a partner character.
+                let shaft_jump = jmp(SHAFT_CHECK, SHAFT_CHECK_TRAMPOLINE.as_ptr() as usize);
+                set_trampoline(
+                    &mut SHAFT_CHECK_TRAMPOLINE,
+                    1,
+                    should_skip_shaft_check as usize,
+                )?;
+                patch(SHAFT_CHECK, &shaft_jump)?;
+
+                // reset the box when starting a new game
+                let new_game_jump = jmp(NEW_GAME, NEW_GAME_TRAMPOLINE.as_ptr() as usize);
+                set_trampoline(&mut NEW_GAME_TRAMPOLINE, 0, new_game as usize)?;
+                patch(NEW_GAME, &new_game_jump)?;
             }
 
             // even if the mod is disabled, we still install our load and save handlers to prevent
@@ -546,6 +615,52 @@ fn main(reason: u32) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[no_mangle]
+#[allow(non_snake_case)]
+unsafe extern "system" fn DirectInput8Create(
+    hinst: HMODULE,
+    version: u32,
+    riidltf: *const GUID,
+    ppv_out: *mut *const c_void,
+    punk_outer: *const IUnknown,
+) -> HRESULT {
+    DINPUT8.direct_input8_create(hinst, version, riidltf, ppv_out, punk_outer)
+}
+
+#[no_mangle]
+#[allow(non_snake_case)]
+unsafe extern "system" fn DllCanUnloadNow() -> HRESULT {
+    DINPUT8.dll_can_unload_now()
+}
+
+#[no_mangle]
+#[allow(non_snake_case)]
+unsafe extern "system" fn DllGetClassObject(
+    rclsid: *const GUID,
+    riid: *const GUID,
+    ppv: *mut *const c_void,
+) -> HRESULT {
+    DINPUT8.dll_get_class_object(rclsid, riid, ppv)
+}
+
+#[no_mangle]
+#[allow(non_snake_case)]
+unsafe extern "system" fn DllRegisterServer() -> HRESULT {
+    DINPUT8.dll_register_server()
+}
+
+#[no_mangle]
+#[allow(non_snake_case)]
+unsafe extern "system" fn DllUnregisterServer() -> HRESULT {
+    DINPUT8.dll_unregister_server()
+}
+
+#[no_mangle]
+#[allow(non_snake_case)]
+unsafe extern "system" fn GetdfDIJoystick() -> *const c_void {
+    DINPUT8.get_df_di_joystick()
 }
 
 #[no_mangle]

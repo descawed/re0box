@@ -1,6 +1,6 @@
 [package]
 name = "re0box"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["descawed <re0box@descawed.com>"]
 edition = "2021"
 description = "An item box mod for Resident Evil 0"
@@ -11,14 +11,19 @@ repository = "https://github.com/descawed/re0box"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [lib]
+name = "dinput8"
 crate-type = ["cdylib"]
 
 [profile.release]
 strip = true
 lto = true
+panic = "abort"
 
 [dependencies]
-anyhow = "1.0.*"
-binrw = "0.11.*"
-configparser = "3.0.*"
-windows = { version = "0.48.*", features = [ "Win32_Foundation", "Win32_System_Memory", "Win32_System_SystemServices" ] }
+anyhow = "1.0"
+binrw = "0.11"
+configparser = "3.0"
+windows = { version = "0.48", features = [ "Win32_Foundation", "Win32_System_LibraryLoader", "Win32_System_Memory", "Win32_System_SystemServices" ] }
+
+[build-dependencies]
+winresource = "0.1"
