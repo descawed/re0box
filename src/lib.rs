@@ -67,7 +67,7 @@ static mut PARTNER_BAG_ORG_TRAMPOLINE: [u8; 26] = [
     0x8D, 0x4C, 0x24, 0x08, // lea ecx,[esp+8]
     0x51, // push ecx
     0xB9, 0x3A, 0xC6, 0x4D, 0x00, // mov ecx,0x4dc63a
-    0xFF, 0xE1, // jmp ecx
+    0xFF, 0xE1, // do_jmp: jmp ecx
 ];
 
 static mut ORGANIZE_TRAMPOLINE: [u8; 13] = [
