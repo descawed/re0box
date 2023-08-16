@@ -570,9 +570,9 @@ fn main(reason: u32) -> Result<()> {
                 )?;
                 patch(EXCHANGE_SIZE_CHECK, &double_jump)?;
 
-                // skip the check preventing giving both shaft keys to both characters when the box
-                // is open. aside from being undesirable, this also crashes the game when using the
-                // box without having a partner character.
+                // skip the check preventing giving both shaft keys to the same character when the box
+                // is open. aside from being undesirable, it also crashes the game when using the box
+                // without having a partner character.
                 let shaft_jump = jmp(SHAFT_CHECK, SHAFT_CHECK_TRAMPOLINE.as_ptr() as usize);
                 set_trampoline(
                     &mut SHAFT_CHECK_TRAMPOLINE,
