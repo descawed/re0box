@@ -82,6 +82,6 @@ value. Repack the arc file and your edits should show up in game.
 ## Credits
 This mod was made by descawed. I used a number of existing tools in the making of this mod; special thanks to:
 - hasherezade for [dll_injector](https://github.com/hasherezade/dll_injector)
-- ThirteenAG for [Ultimate-ASI-Loader](https://github.com/ThirteenAG/Ultimate-ASI-Loader)
+- ThirteenAG for [Ultimate ASI Loader](https://github.com/ThirteenAG/Ultimate-ASI-Loader)
 - FluffyQuack for [ARCtool](https://residentevilmodding.boards.net/thread/481/)
 - onepiecefreak3 for [GMDConverter](https://github.com/onepiecefreak3/GMDConverter)
