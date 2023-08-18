@@ -1,9 +1,15 @@
 use std::arch::asm;
 use std::ffi::c_void;
 use std::io::Cursor;
+use std::path::PathBuf;
 
 use anyhow::{anyhow, Result};
 use binrw::{binrw, BinReaderExt, BinWrite};
+use windows::core::PWSTR;
+use windows::Win32::Foundation::MAX_PATH;
+use windows::Win32::System::Threading::{
+    GetCurrentProcess, QueryFullProcessImageNameW, PROCESS_NAME_FORMAT,
+};
 
 use super::inventory::{Bag, Item};
 
@@ -265,5 +271,24 @@ impl Game {
         self.saved_boxes = reader.read_le()?;
 
         Ok(())
+    }
+
+    pub unsafe fn get_game_dir() -> PathBuf {
+        let mut path_buf = [0u16; MAX_PATH as usize];
+        let wstr = PWSTR::from_raw(path_buf.as_mut_ptr());
+        let mut size = MAX_PATH;
+        match QueryFullProcessImageNameW(
+            GetCurrentProcess(),
+            PROCESS_NAME_FORMAT::default(),
+            wstr,
+            &mut size,
+        )
+        .ok()
+        .and_then(|_| wstr.to_string().ok())
+        .and_then(|s| PathBuf::from(s).parent().map(PathBuf::from))
+        {
+            Some(p) => p,
+            None => PathBuf::from("../"), // if we can't get the executable directory, just return the parent directory
+        }
     }
 }

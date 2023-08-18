@@ -30,7 +30,7 @@ pub fn jge(from: usize, to: usize) -> [u8; 6] {
 
 pub unsafe fn unprotect(ptr: *const c_void, size: usize) -> Result<()> {
     let mut old_protect = PAGE_PROTECTION_FLAGS::default();
-    VirtualProtect(ptr, size, PAGE_EXECUTE_READWRITE, &mut old_protect).ok()?;
+    VirtualProtect(ptr, size, PAGE_EXECUTE_READWRITE, &mut old_protect)?;
 
     Ok(())
 }
