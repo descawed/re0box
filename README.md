@@ -41,9 +41,10 @@ running; you'll need to restart the game for it to pick up any changes.
   access the item box.
 
 ## Uninstall
-Delete dinput8.dll from the Resident Evil 0 folder. None of the other mod files will have any effect once that's gone,
-but if you want to purge everything, this is the full list of files added by the mod:
-- dinput8.dll
+Delete scripts\re0box.asi from the Resident Evil 0 folder. None of the other mod files will have any effect once that's
+gone, but if you want to purge everything, this is the full list of files added by the mod:
+- dinput8.dll (note that other mods may need this file. if you have anything in your scripts folder besides re0box.asi,
+  you should leave this one alone.)
 - re0box.ini
 - re0box_readme.txt
 - nativePC\arc\message\msg_chS_box.arc
@@ -54,12 +55,15 @@ but if you want to purge everything, this is the full list of files added by the
 - nativePC\arc\message\msg_ita_box.arc
 - nativePC\arc\message\msg_jpn_box.arc
 - nativePC\arc\message\msg_spa_box.arc
+- scripts\re0box.asi
 
 ## Build
-This mod is written in Rust and works via DLL injection. The default target is i686-windows-pc-gnu because RE0 is a
-32-bit game and I'm cross-compiling from Linux. I imagine the MSVC toolchain would also work, but you might need to
-change how the build script handles the .def file. As long as Rust and the appropriate toolchain are installed, you
-should just be able to do a `cargo build`.
+This mod is written in Rust. The default target is i686-windows-pc-gnu because RE0 is a 32-bit game and I'm
+cross-compiling from Linux. I imagine the MSVC toolchain would also work but I haven't tested it. As long as Rust and
+the appropriate toolchain are installed, you should just be able to do a `cargo build`. The mod is currently distributed
+as an ASI plugin using [Ultimate-ASI-Loader](https://github.com/ThirteenAG/Ultimate-ASI-Loader) as the loader. This
+helps ensure compatibility with other DLL-based mods. Just rename re0box.dll to re0box.asi and put it in the scripts
+folder.
 
 Aside from the DLL itself, we also have to edit the game's message files so typewriters prompt to use the box. These are
 found in nativePC\arc\message. There's one file for each language the game supports, named in the format
@@ -78,5 +82,6 @@ value. Repack the arc file and your edits should show up in game.
 ## Credits
 This mod was made by descawed. I used a number of existing tools in the making of this mod; special thanks to:
 - hasherezade for [dll_injector](https://github.com/hasherezade/dll_injector)
+- ThirteenAG for [Ultimate ASI Loader](https://github.com/ThirteenAG/Ultimate-ASI-Loader)
 - FluffyQuack for [ARCtool](https://residentevilmodding.boards.net/thread/481/)
 - onepiecefreak3 for [GMDConverter](https://github.com/onepiecefreak3/GMDConverter)

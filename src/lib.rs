@@ -6,15 +6,11 @@ use std::str;
 
 use anyhow::Result;
 use configparser::ini::Ini;
-use windows::core::{IUnknown, GUID, HRESULT};
 use windows::Win32::Foundation::{BOOL, HMODULE};
 use windows::Win32::System::SystemServices::DLL_PROCESS_ATTACH;
 
 mod patch;
 use patch::*;
-
-mod dinput8;
-use dinput8::*;
 
 mod game;
 use game::*;
@@ -259,7 +255,6 @@ static mut NEW_GAME_TRAMPOLINE: [u8; 17] = [
 
 static mut BOX: ItemBox = ItemBox::new();
 static mut GAME: Game = Game::new();
-static mut DINPUT8: DInput8 = DInput8::new();
 
 unsafe extern "C" fn new_game() {
     // reset the box when starting a new game
@@ -425,9 +420,10 @@ unsafe extern "fastcall" fn get_partner_bag(unknown: *mut c_void) -> *mut Bag {
 
 fn main(reason: u32) -> Result<()> {
     if reason == DLL_PROCESS_ATTACH {
+        let config_path = unsafe { Game::get_game_dir() }.join("re0box.ini");
         let mut config = Ini::new();
         // we don't care if the config fails to load, we'll just use the defaults
-        let _ = config.load("re0box.ini");
+        let _ = config.load(config_path);
         let is_enabled = config
             .getboolcoerce("Enable", "Mod")
             .ok()
@@ -446,7 +442,10 @@ fn main(reason: u32) -> Result<()> {
                 // when the game tries to display the partner's inventory, show the box instead if it's open
                 let bag_jump = jmp(GET_PARTNER_BAG, get_partner_bag as usize);
                 patch(GET_PARTNER_BAG, &bag_jump)?;
-                let org_jump = jmp(GET_PARTNER_BAG_ORG, PARTNER_BAG_ORG_TRAMPOLINE.as_ptr() as usize);
+                let org_jump = jmp(
+                    GET_PARTNER_BAG_ORG,
+                    PARTNER_BAG_ORG_TRAMPOLINE.as_ptr() as usize,
+                );
                 set_trampoline(&mut PARTNER_BAG_ORG_TRAMPOLINE, 0, get_box_if_open as usize)?;
                 patch(GET_PARTNER_BAG_ORG, &org_jump)?;
 
@@ -615,52 +614,6 @@ fn main(reason: u32) -> Result<()> {
     }
 
     Ok(())
-}
-
-#[no_mangle]
-#[allow(non_snake_case)]
-unsafe extern "system" fn DirectInput8Create(
-    hinst: HMODULE,
-    version: u32,
-    riidltf: *const GUID,
-    ppv_out: *mut *const c_void,
-    punk_outer: *const IUnknown,
-) -> HRESULT {
-    DINPUT8.direct_input8_create(hinst, version, riidltf, ppv_out, punk_outer)
-}
-
-#[no_mangle]
-#[allow(non_snake_case)]
-unsafe extern "system" fn DllCanUnloadNow() -> HRESULT {
-    DINPUT8.dll_can_unload_now()
-}
-
-#[no_mangle]
-#[allow(non_snake_case)]
-unsafe extern "system" fn DllGetClassObject(
-    rclsid: *const GUID,
-    riid: *const GUID,
-    ppv: *mut *const c_void,
-) -> HRESULT {
-    DINPUT8.dll_get_class_object(rclsid, riid, ppv)
-}
-
-#[no_mangle]
-#[allow(non_snake_case)]
-unsafe extern "system" fn DllRegisterServer() -> HRESULT {
-    DINPUT8.dll_register_server()
-}
-
-#[no_mangle]
-#[allow(non_snake_case)]
-unsafe extern "system" fn DllUnregisterServer() -> HRESULT {
-    DINPUT8.dll_unregister_server()
-}
-
-#[no_mangle]
-#[allow(non_snake_case)]
-unsafe extern "system" fn GetdfDIJoystick() -> *const c_void {
-    DINPUT8.get_df_di_joystick()
 }
 
 #[no_mangle]
