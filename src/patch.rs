@@ -13,6 +13,11 @@ pub const fn addr_offset(
     to.overflowing_sub(from + inst_size).0.to_le_bytes()
 }
 
+pub fn call(from: usize, to: usize) -> [u8; 5] {
+    let bytes = addr_offset(from, to, 5);
+    [0xE8, bytes[0], bytes[1], bytes[2], bytes[3]]
+}
+
 pub fn jmp(from: usize, to: usize) -> [u8; 5] {
     let bytes = addr_offset(from, to, 5);
     [0xE9, bytes[0], bytes[1], bytes[2], bytes[3]]

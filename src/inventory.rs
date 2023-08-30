@@ -71,6 +71,10 @@ impl Bag {
                 .map(|i| i.id == SLOT_TWO)
                 .unwrap_or(false)
     }
+
+    pub fn is_slot_two(&self, index: usize) -> bool {
+        self.items[index].id == SLOT_TWO
+    }
 }
 
 #[derive(Debug)]
@@ -192,7 +196,7 @@ impl ItemBox {
         self.is_open = false;
     }
 
-    pub fn scroll_view(&mut self, offset: isize) {
+    pub fn scroll_view(&mut self, offset: isize) -> bool {
         // index must be a multiple of 2; round offset up if it was odd
         let mut new_index = self.index as isize + (offset + 1) & !1;
         if new_index < 0 {
@@ -206,8 +210,14 @@ impl ItemBox {
             }
         }
 
-        self.index = new_index as usize;
-        self.update_view();
+        let new_index = new_index as usize;
+        if self.index != new_index {
+            self.index = new_index;
+            self.update_view();
+            true
+        } else {
+            false
+        }
     }
 
     pub fn is_open(&self) -> bool {
