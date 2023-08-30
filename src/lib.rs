@@ -55,6 +55,33 @@ static mut SCROLL_DOWN_TRAMPOLINE: [u8; 20] = [
     0xFF, 0xE6, // jmp esi
 ];
 
+static mut SCROLL_LEFT_TRAMPOLINE: [u8; 22] = [
+    0x79, 0x0D, // jns done
+    0x51, // push ecx
+    0x52, // push edx
+    0x57, // push edi
+    0xE8, 0x00, 0x00, 0x00, 0x00, // call <fn>
+    0x83, 0xC4, 0x04, // add esp,4
+    0x5A, // pop edx
+    0x59, // pop ecx
+    0xBA, 0xF9, 0x39, 0x5E, 0x00, // done: mov edx,0x5e39f9
+    0xFF, 0xE2, // jmp edx
+];
+
+static mut SCROLL_RIGHT_TRAMPOLINE: [u8; 25] = [
+    0x83, 0xF8, 0x06, // cmp eax,6
+    0x7C, 0x0D, // jl done
+    0x51, // push ecx
+    0x52, // push edx
+    0x57, // push edi
+    0xE8, 0x00, 0x00, 0x00, 0x00, // call <fn>
+    0x83, 0xC4, 0x04, // add esp,4
+    0x5A, // pop edx
+    0x59, // pop ecx
+    0xBA, 0xF9, 0x39, 0x5E, 0x00, // done: mov edx,0x5e39f9
+    0xFF, 0xE2, // jmp edx
+];
+
 static mut PARTNER_BAG_ORG_TRAMPOLINE: [u8; 26] = [
     0xE8, 0x00, 0x00, 0x00, 0x00, // call <fn>
     0xB9, 0x41, 0xC6, 0x4D, 0x00, // mov ecx,0x4dc641
@@ -246,11 +273,12 @@ static mut SHAFT_CHECK_TRAMPOLINE: [u8; 31] = [
     0xFF, 0xE0, // do_jmp: jmp eax
 ];
 
-static mut NEW_GAME_TRAMPOLINE: [u8; 17] = [
+static mut NEW_GAME_TRAMPOLINE: [u8; 14] = [
+    0x51, // push ecx
     0xE8, 0x00, 0x00, 0x00, 0x00, // call <fn>
-    0xA1, 0x18, 0xE0, 0xDC, 0x00, // mov eax,[0xdce018]
-    0xB9, 0x75, 0x58, 0x40, 0x00, // mov ecx,0x405875
-    0xFF, 0xE1, // jmp ecx
+    0x59, // pop ecx
+    0xB8, 0x40, 0x13, 0x41, 0x00, // mov eax,0x411340
+    0xFF, 0xE0, // jmp eax
 ];
 
 static mut BOX: ItemBox = ItemBox::new();
@@ -375,10 +403,41 @@ unsafe extern "C" fn track_typewriter_message(had_ink_ribbon: bool) {
     GAME.user_had_ink_ribbon = had_ink_ribbon;
 }
 
+unsafe extern "C" fn scroll_left(unknown: *const c_void) -> i32 {
+    if BOX.scroll_view(-2) {
+        GAME.draw_bags(unknown);
+        if BOX.view().is_slot_two(1) {
+            0
+        } else {
+            1
+        }
+    } else {
+        5 // we're already at the top, so wrap around to the last cell in the view
+    }
+}
+
+unsafe extern "C" fn scroll_right(unknown: *const c_void) -> i32 {
+    if BOX.scroll_view(2) {
+        GAME.draw_bags(unknown);
+        4
+    } else {
+        0 // we're already at the bottom, so wrap around to the first cell in the view
+    }
+}
+
 unsafe extern "C" fn scroll(unknown: *const c_void, offset: isize) {
-    BOX.scroll_view(offset);
-    // by default the inventory display doesn't update at this point, so we have to do it ourselves
-    GAME.draw_bags(unknown);
+    if BOX.scroll_view(offset) {
+        // by default the inventory display doesn't update at this point, so we have to do it ourselves
+        GAME.draw_bags(unknown);
+        // if we've ended up on the second slot of a two-slot item, back up one
+        let selection_index = unknown.offset(0x2bc) as *mut usize;
+        if BOX.view().is_slot_two(*selection_index) {
+            *selection_index -= 1;
+        }
+        // the sound doesn't normally play when moving the cursor past the edges of the inventory,
+        // so we have to do that, too
+        GAME.play_sound(MOVE_SELECTION_SOUND);
+    }
 }
 
 unsafe fn update_box() {
@@ -472,6 +531,20 @@ fn main(reason: u32) -> Result<()> {
                     jge(SCROLL_DOWN_CHECK, SCROLL_DOWN_TRAMPOLINE.as_ptr() as usize);
                 set_trampoline(&mut SCROLL_DOWN_TRAMPOLINE, 4, scroll as usize)?;
                 patch(SCROLL_DOWN_CHECK, &scroll_down_jump)?;
+
+                // when trying to scroll left from the first inventory cell, scroll the box view
+                let scroll_left_jump =
+                    jmp(SCROLL_LEFT_CHECK, SCROLL_LEFT_TRAMPOLINE.as_ptr() as usize);
+                set_trampoline(&mut SCROLL_LEFT_TRAMPOLINE, 5, scroll_left as usize)?;
+                patch(SCROLL_LEFT_CHECK, &scroll_left_jump)?;
+
+                // when trying to scroll right from the last inventory cell, scroll the box view
+                let scroll_right_jump = jmp(
+                    SCROLL_RIGHT_CHECK,
+                    SCROLL_RIGHT_TRAMPOLINE.as_ptr() as usize,
+                );
+                set_trampoline(&mut SCROLL_RIGHT_TRAMPOLINE, 8, scroll_right as usize)?;
+                patch(SCROLL_RIGHT_CHECK, &scroll_right_jump)?;
 
                 // after the view is organized, copy its contents back into the box
                 let organize_jump1 = jmp(ORGANIZE_END1, ORGANIZE_TRAMPOLINE.as_ptr() as usize);
@@ -581,9 +654,9 @@ fn main(reason: u32) -> Result<()> {
                 patch(SHAFT_CHECK, &shaft_jump)?;
 
                 // reset the box when starting a new game
-                let new_game_jump = jmp(NEW_GAME, NEW_GAME_TRAMPOLINE.as_ptr() as usize);
-                set_trampoline(&mut NEW_GAME_TRAMPOLINE, 0, new_game as usize)?;
-                patch(NEW_GAME, &new_game_jump)?;
+                let new_game_call = call(NEW_GAME, NEW_GAME_TRAMPOLINE.as_ptr() as usize);
+                set_trampoline(&mut NEW_GAME_TRAMPOLINE, 1, new_game as usize)?;
+                patch(NEW_GAME, &new_game_call)?;
             }
 
             // even if the mod is disabled, we still install our load and save handlers to prevent

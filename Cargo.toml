@@ -1,6 +1,6 @@
 [package]
 name = "re0box"
-version = "0.3.0"
+version = "0.3.1"
 authors = ["descawed <re0box@descawed.com>"]
 edition = "2021"
 description = "An item box mod for Resident Evil 0"

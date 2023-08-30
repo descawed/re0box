@@ -16,11 +16,14 @@ use super::inventory::{Bag, Item};
 pub const GET_CHARACTER_BAG: usize = 0x0050DA80;
 pub const GET_PARTNER_BAG: usize = 0x004DC8B0;
 pub const DRAW_BAGS: usize = 0x005E6ED0;
+pub const PLAY_SOUND: usize = 0x005EE920;
 pub const GET_PARTNER_BAG_ORG: usize = 0x004DC625;
 pub const ORGANIZE_END1: usize = 0x004DADC7;
 pub const ORGANIZE_END2: usize = 0x004DADDA;
 pub const SCROLL_UP_CHECK: usize = 0x005E386A;
 pub const SCROLL_DOWN_CHECK: usize = 0x005E3935;
+pub const SCROLL_LEFT_CHECK: usize = 0x005E39F1;
+pub const SCROLL_RIGHT_CHECK: usize = 0x005E3AFD;
 pub const GET_PARTNER_CHARACTER: usize = 0x0066DEC0;
 pub const SUB_522A20: usize = 0x00522A20;
 pub const PTR_DCDF3C: usize = 0x00DCDF3C;
@@ -50,7 +53,8 @@ pub const MSG_LOAD1: usize = 0x0040864E;
 pub const MSG_LOAD2: usize = 0x005D6471;
 pub const MSG_LOAD3: usize = 0x005D67E1;
 pub const SHAFT_CHECK: usize = 0x005E3D73;
-pub const NEW_GAME: usize = 0x00405870;
+pub const NEW_GAME: usize = 0x0041249C;
+pub const MOVE_SELECTION_SOUND: i32 = 2050;
 pub const FAIL_SOUND: i32 = 2053;
 pub const NUM_SAVE_SLOTS: usize = 20;
 pub const MAGIC: &[u8] = b"IBOX";
@@ -85,6 +89,7 @@ pub struct Game {
     sub_522a20: Option<unsafe extern "fastcall" fn(*const c_void) -> i32>,
     prepare_inventory: Option<unsafe extern "fastcall" fn(*const c_void) -> bool>,
     sub_4db330: Option<unsafe extern "fastcall" fn(*const c_void) -> i32>,
+    play_sound: Option<unsafe extern "C" fn(i32) -> i32>,
     get_remote_storage: *const unsafe extern "C" fn() -> *const *const usize,
     ptr_dcdf3c: *const *const c_void,
     ptr_dd0bd0: *const *const c_void,
@@ -105,6 +110,7 @@ impl Game {
             sub_522a20: None,
             prepare_inventory: None,
             sub_4db330: None,
+            play_sound: None,
             get_remote_storage: std::ptr::null(),
             ptr_dd0bd0: std::ptr::null(),
             ptr_dcdf3c: std::ptr::null(),
@@ -141,6 +147,7 @@ impl Game {
         self.sub_522a20 = Some(std::mem::transmute(SUB_522A20));
         self.prepare_inventory = Some(std::mem::transmute(PREPARE_INVENTORY));
         self.sub_4db330 = Some(std::mem::transmute(SUB_4DB330));
+        self.play_sound = Some(std::mem::transmute(PLAY_SOUND));
         self.get_remote_storage =
             STEAM_REMOTE_STORAGE as *const unsafe extern "C" fn() -> *const *const usize;
         self.ptr_dd0bd0 = PTR_DD0BD0 as *const *const c_void;
@@ -188,6 +195,10 @@ impl Game {
 
     pub unsafe fn sub_4db330(&self, unknown: *const c_void) -> i32 {
         self.sub_4db330.unwrap()(unknown)
+    }
+
+    pub unsafe fn play_sound(&self, sound_id: i32) -> i32 {
+        self.play_sound.unwrap()(sound_id)
     }
 
     pub unsafe fn get_remote_storage(&self) -> *const *const usize {
