@@ -404,7 +404,7 @@ unsafe extern "C" fn track_typewriter_message(had_ink_ribbon: bool) {
 }
 
 unsafe extern "C" fn scroll_left(unknown: *const c_void) -> i32 {
-    if BOX.scroll_view(-2) {
+    if BOX.is_open() && BOX.scroll_view(-2) {
         GAME.draw_bags(unknown);
         if BOX.view().is_slot_two(1) {
             0
@@ -417,7 +417,7 @@ unsafe extern "C" fn scroll_left(unknown: *const c_void) -> i32 {
 }
 
 unsafe extern "C" fn scroll_right(unknown: *const c_void) -> i32 {
-    if BOX.scroll_view(2) {
+    if BOX.is_open() && BOX.scroll_view(2) {
         GAME.draw_bags(unknown);
         4
     } else {
@@ -426,7 +426,7 @@ unsafe extern "C" fn scroll_right(unknown: *const c_void) -> i32 {
 }
 
 unsafe extern "C" fn scroll(unknown: *const c_void, offset: isize) {
-    if BOX.scroll_view(offset) {
+    if BOX.is_open() && BOX.scroll_view(offset) {
         // by default the inventory display doesn't update at this point, so we have to do it ourselves
         GAME.draw_bags(unknown);
         // if we've ended up on the second slot of a two-slot item, back up one
