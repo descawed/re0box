@@ -19,10 +19,10 @@ file (see the Configuration section below).
   below) and disable the mod by setting Mod=0. That will disable all the mod's features but prevent the game from
   deleting your item boxes in other saves.
 - This mod supports all the languages that I can select in my version of the game, which are Simplified Chinese,
-  Traditional Chinese, English, French, German, Italian, Japanese, and Spanish. However, only English and German have
-  updated typewriter text that mentions the item box. If you're playing in one of the other languages I mentioned,
-  you'll still get the prompt to the use the box, but the text won't say anything about it, so it may be a little
-  confusing. If someone wants to send me appropriate text for the other languages, I'll update the mod. If you're
+  Traditional Chinese, English, French, German, Italian, Japanese, and Spanish. However, only English, German, and
+  Spanish have updated typewriter text that mentions the item box. If you're playing in one of the other languages I
+  mentioned, you'll still get the prompt to the use the box, but the text won't say anything about it, so it may be a
+  little confusing. If someone wants to send me appropriate text for the other languages, I'll update the mod. If you're
   playing in a language that's NOT one of the ones I mentioned, you won't get the prompt at all and the mod will be
   unusable for you. To add support for other languages, I'd need someone to go into the game folder and send me a copy
   of the "nativePC\arc\message\msg_(lang).arc" file for that language, along with updated text for the typewriter
@@ -85,3 +85,4 @@ This mod was made by descawed. I used a number of existing tools in the making o
 - ThirteenAG for [Ultimate ASI Loader](https://github.com/ThirteenAG/Ultimate-ASI-Loader)
 - FluffyQuack for [ARCtool](https://residentevilmodding.boards.net/thread/481/)
 - onepiecefreak3 for [GMDConverter](https://github.com/onepiecefreak3/GMDConverter)
+- ernestin1245 for the Spanish translation
