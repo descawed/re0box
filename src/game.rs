@@ -24,6 +24,7 @@ pub const SCROLL_UP_CHECK: usize = 0x005E386A;
 pub const SCROLL_DOWN_CHECK: usize = 0x005E3935;
 pub const SCROLL_LEFT_CHECK: usize = 0x005E39F1;
 pub const SCROLL_RIGHT_CHECK: usize = 0x005E3AFD;
+pub const SCROLL_RIGHT_TWO_CHECK: usize = 0x005E3B5A;
 pub const GET_PARTNER_CHARACTER: usize = 0x0066DEC0;
 pub const SUB_522A20: usize = 0x00522A20;
 pub const PTR_DCDF3C: usize = 0x00DCDF3C;

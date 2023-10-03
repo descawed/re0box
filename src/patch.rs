@@ -1,3 +1,7 @@
+// I don't want to get warnings in here about unused instruction functions that I've used in the
+// past and could want again in the future
+#![allow(dead_code)]
+
 use std::ffi::c_void;
 use windows::Win32::System::Memory::{
     VirtualProtect, PAGE_EXECUTE_READWRITE, PAGE_PROTECTION_FLAGS,

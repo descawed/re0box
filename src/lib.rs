@@ -3,8 +3,8 @@
 use std::ffi::c_void;
 use std::panic;
 use std::path::{Path, PathBuf};
-
 use std::str;
+
 use anyhow::Result;
 use configparser::ini::Ini;
 use simplelog::LevelFilter;
@@ -38,26 +38,26 @@ const MSG_FILES: [&[u8; 8]; 8] = [
 
 // I tried the naked-function crate, but it failed to compile for me, complaining about "unknown
 // directive" .pushsection. maybe it has something to do with the fact that I'm cross-compiling.
-static mut SCROLL_UP_TRAMPOLINE: [u8; 20] = [
+static mut SCROLL_UP_TRAMPOLINE: [u8; 18] = [
     0x60, // pushad
-    0x6A, 0xFE, // push -2
     0x57, // push edi
     0xE8, 0, 0, 0, 0, // call <fn>
-    0x83, 0xC4, 0x08, // add esp,8
+    0x83, 0xC4, 0x04, // add esp,4
     0x61, // popad
     0xBE, 0x9E, 0x4D, 0x5E, 0, // mov esi, 0x5e4d9e
     0xFF, 0xE6, // jmp esi
 ];
 
-static mut SCROLL_DOWN_TRAMPOLINE: [u8; 20] = [
-    0x60, // pushad
-    0x6A, 0x02, // push 2
+static mut SCROLL_DOWN_TRAMPOLINE: [u8; 27] = [
+    0x50, // push eax
     0x57, // push edi
     0xE8, 0, 0, 0, 0, // call <fn>
     0x83, 0xC4, 0x08, // add esp,8
-    0x61, // popad
-    0xBE, 0x9E, 0x4D, 0x5E, 0, // mov esi, 0x5e4d9e
-    0xFF, 0xE6, // jmp esi
+    0xBB, 0x3B, 0x39, 0x5E, 0x00, // mov ebx,0x5e393b
+    0x83, 0xF8, 0x06, // cmp eax,6
+    0x7C, 0x05, // jl do_jump
+    0xBB, 0x9E, 0x4D, 0x5E, 0x00, // mov ebx,0x5e4d9e
+    0xFF, 0xE3, // do_jump: jmp ebx
 ];
 
 static mut SCROLL_LEFT_TRAMPOLINE: [u8; 22] = [
@@ -73,18 +73,25 @@ static mut SCROLL_LEFT_TRAMPOLINE: [u8; 22] = [
     0xFF, 0xE2, // jmp edx
 ];
 
-static mut SCROLL_RIGHT_TRAMPOLINE: [u8; 25] = [
-    0x83, 0xF8, 0x06, // cmp eax,6
-    0x7C, 0x0D, // jl done
-    0x51, // push ecx
-    0x52, // push edx
+static mut SCROLL_RIGHT_TRAMPOLINE: [u8; 22] = [
+    0x83, 0xF8, 0x05, // cmp eax,5
+    0x7C, 0x0A, // jl done
+    0x50, // push eax
     0x57, // push edi
     0xE8, 0x00, 0x00, 0x00, 0x00, // call <fn>
-    0x83, 0xC4, 0x04, // add esp,4
-    0x5A, // pop edx
-    0x59, // pop ecx
-    0xBA, 0xF9, 0x39, 0x5E, 0x00, // done: mov edx,0x5e39f9
-    0xFF, 0xE2, // jmp edx
+    0x83, 0xC4, 0x08, // add esp,8
+    0xBB, 0x03, 0x3B, 0x5E, 0x00, // done: mov ebx,0x5e3b03
+    0xFF, 0xE3, // jmp ebx
+];
+
+static mut SCROLL_RIGHT_TWO_TRAMPOLINE: [u8; 28] = [
+    0xFF, 0xB7, 0xBC, 0x02, 0x00, 0x00, // push dword ptr [edi+0x2bc]
+    0x57, // push edi
+    0xE8, 0x00, 0x00, 0x00, 0x00, // call <fn>
+    0x83, 0xC4, 0x08, // add esp,8
+    0x89, 0x87, 0xBC, 0x02, 0x00, 0x00, // mov dword ptr [edi+0x2bc],eax
+    0xB8, 0x64, 0x3B, 0x5E, 0x00, // mov eax,0x5e3b64
+    0xFF, 0xE0, // jmp eax
 ];
 
 static mut PARTNER_BAG_ORG_TRAMPOLINE: [u8; 26] = [
@@ -445,23 +452,28 @@ unsafe extern "C" fn scroll_left(unknown: *const c_void) -> i32 {
             1
         }
     } else {
-        5 // we're already at the top, so wrap around to the last cell in the view
+        (BAG_SIZE - 1) as i32 // we're already at the top, so wrap around to the last cell in the view
     }
 }
 
-unsafe extern "C" fn scroll_right(unknown: *const c_void) -> i32 {
-    log::trace!("scroll_right");
-    if BOX.is_open() && BOX.scroll_view(2) {
+unsafe extern "C" fn scroll_right(unknown: *const c_void, new_index: i32) -> i32 {
+    log::trace!("scroll_right {}", new_index);
+    let bag_size = BAG_SIZE as i32;
+    if BOX.is_open()
+        && (new_index == bag_size
+            || (new_index == bag_size - 1 && BOX.view().is_slot_two(new_index as usize)))
+        && BOX.scroll_view(2)
+    {
         GAME.draw_bags(unknown);
-        4
+        bag_size - 2
     } else {
-        0 // we're already at the bottom, so wrap around to the first cell in the view
+        new_index % bag_size
     }
 }
 
-unsafe extern "C" fn scroll(unknown: *const c_void, offset: isize) {
-    log::trace!("scroll {}", offset);
-    if BOX.is_open() && BOX.scroll_view(offset) {
+unsafe extern "C" fn scroll_up(unknown: *const c_void) {
+    log::trace!("scroll_up");
+    if BOX.is_open() && BOX.scroll_view(-2) {
         // by default the inventory display doesn't update at this point, so we have to do it ourselves
         GAME.draw_bags(unknown);
         // if we've ended up on the second slot of a two-slot item, back up one
@@ -473,6 +485,26 @@ unsafe extern "C" fn scroll(unknown: *const c_void, offset: isize) {
         // so we have to do that, too
         GAME.play_sound(MOVE_SELECTION_SOUND);
     }
+}
+
+unsafe extern "C" fn scroll_down(unknown: *const c_void, mut new_index: i32) -> i32 {
+    log::trace!("scroll_down {}", new_index);
+    if BOX.is_open() {
+        if new_index >= BAG_SIZE as i32 && BOX.scroll_view(2) {
+            // by default the inventory display doesn't update at this point, so we have to do it ourselves
+            GAME.draw_bags(unknown);
+            // the sound doesn't normally play when moving the cursor past the edges of the inventory,
+            // so we have to do that, too
+            GAME.play_sound(MOVE_SELECTION_SOUND);
+            new_index -= 2;
+        }
+        // if we've ended up on the second slot of a two-slot item, back up one
+        if BOX.view().is_slot_two(new_index as usize) {
+            return new_index - 1;
+        }
+    }
+
+    new_index
 }
 
 unsafe fn update_box() {
@@ -549,12 +581,12 @@ unsafe fn initialize(is_enabled: bool, is_leave_allowed: bool) -> Result<()> {
 
         // when trying to scroll up past the top inventory row, scroll the box view
         let scroll_up_jump = jl(SCROLL_UP_CHECK, SCROLL_UP_TRAMPOLINE.as_ptr() as usize);
-        set_trampoline(&mut SCROLL_UP_TRAMPOLINE, 4, scroll as usize)?;
+        set_trampoline(&mut SCROLL_UP_TRAMPOLINE, 2, scroll_up as usize)?;
         patch(SCROLL_UP_CHECK, &scroll_up_jump)?;
 
         // when trying to scroll down past the last inventory row, scroll the box view
-        let scroll_down_jump = jge(SCROLL_DOWN_CHECK, SCROLL_DOWN_TRAMPOLINE.as_ptr() as usize);
-        set_trampoline(&mut SCROLL_DOWN_TRAMPOLINE, 4, scroll as usize)?;
+        let scroll_down_jump = jmp(SCROLL_DOWN_CHECK, SCROLL_DOWN_TRAMPOLINE.as_ptr() as usize);
+        set_trampoline(&mut SCROLL_DOWN_TRAMPOLINE, 2, scroll_down as usize)?;
         patch(SCROLL_DOWN_CHECK, &scroll_down_jump)?;
 
         // when trying to scroll left from the first inventory cell, scroll the box view
@@ -567,8 +599,14 @@ unsafe fn initialize(is_enabled: bool, is_leave_allowed: bool) -> Result<()> {
             SCROLL_RIGHT_CHECK,
             SCROLL_RIGHT_TRAMPOLINE.as_ptr() as usize,
         );
-        set_trampoline(&mut SCROLL_RIGHT_TRAMPOLINE, 8, scroll_right as usize)?;
+        set_trampoline(&mut SCROLL_RIGHT_TRAMPOLINE, 7, scroll_right as usize)?;
         patch(SCROLL_RIGHT_CHECK, &scroll_right_jump)?;
+        let scroll_right_two_jump = jmp(
+            SCROLL_RIGHT_TWO_CHECK,
+            SCROLL_RIGHT_TWO_TRAMPOLINE.as_ptr() as usize,
+        );
+        set_trampoline(&mut SCROLL_RIGHT_TWO_TRAMPOLINE, 7, scroll_right as usize)?;
+        patch(SCROLL_RIGHT_TWO_CHECK, &scroll_right_two_jump)?;
 
         // after the view is organized, copy its contents back into the box
         let organize_jump1 = jmp(ORGANIZE_END1, ORGANIZE_TRAMPOLINE.as_ptr() as usize);
@@ -744,8 +782,7 @@ fn main(reason: u32) -> Result<()> {
             .unwrap_or(LevelFilter::Info);
         let mut log_file_path = config
             .get("Log", "Path")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("re0box.log"));
+            .map_or_else(|| PathBuf::from("re0box.log"), PathBuf::from);
 
         if !log_file_path.is_absolute() {
             log_file_path = game_dir.join(log_file_path);

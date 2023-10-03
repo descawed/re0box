@@ -1,6 +1,6 @@
 use binrw::binrw;
 
-const BAG_SIZE: usize = 6;
+pub const BAG_SIZE: usize = 6;
 const SLOT_TWO: i32 = 180;
 const TWO_SLOT_ITEMS: [i32; 9] = [
     5,   // hunting gun
@@ -80,13 +80,14 @@ impl Bag {
             // if there's a two-slot item not followed by SLOT_TWO, or a SLOT_TWO preceded by an
             // item that's not two slots, the view is in a broken state
             let is_two_slot_item = item.is_two_slot_item();
-            let slot_two_follows = self
-                .items
-                .get(i + 1)
-                .map(Item::is_slot_two)
-                .unwrap_or(false);
+            let slot_two_follows = self.items.get(i + 1).map_or(false, Item::is_slot_two);
             if is_two_slot_item != slot_two_follows {
-                log::trace!("View is broken at {}: i is_two_slot_item = {}, i + 1 is_slot_two = {}", i, is_two_slot_item, slot_two_follows);
+                log::trace!(
+                    "View is broken at {}: i is_two_slot_item = {}, i + 1 is_slot_two = {}",
+                    i,
+                    is_two_slot_item,
+                    slot_two_follows
+                );
                 return true;
             }
         }
@@ -108,15 +109,11 @@ impl Bag {
         // a two-slot item
         num_empty >= 2
             || (num_empty == 1 && !self.items[index].is_empty())
-            || self
-                .items
-                .get(index + 1)
-                .map(Item::is_slot_two)
-                .unwrap_or(false)
+            || self.items.get(index + 1).map_or(false, Item::is_slot_two)
     }
 
     pub fn is_slot_two(&self, index: usize) -> bool {
-        self.items[index].is_slot_two()
+        self.items.get(index).map_or(false, Item::is_slot_two)
     }
 }
 
@@ -190,9 +187,8 @@ impl ItemBox {
         // remove all empty slots and fix any broken two-slot items
         let mut last_item: Option<&Item> = None;
         for (i, item) in self.items.iter().enumerate() {
-            let (last_item_id, expect_slot_two) = last_item
-                .map(|i| (i.id, i.is_two_slot_item()))
-                .unwrap_or((0, false));
+            let (last_item_id, expect_slot_two) =
+                last_item.map_or((0, false), |i| (i.id, i.is_two_slot_item()));
             last_item = Some(item);
 
             if item.is_slot_two() != expect_slot_two {
