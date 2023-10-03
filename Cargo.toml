@@ -1,6 +1,6 @@
 [package]
 name = "re0box"
-version = "0.3.1"
+version = "0.4.0"
 authors = ["descawed <re0box@descawed.com>"]
 edition = "2021"
 description = "An item box mod for Resident Evil 0"
@@ -20,9 +20,11 @@ panic = "abort"
 
 [dependencies]
 anyhow = "1.0"
-binrw = "0.11"
+binrw = "0.12"
 configparser = "3.0"
-windows = { version = "0.51", features = [ "Win32_Foundation", "Win32_System_Memory", "Win32_System_SystemServices", "Win32_System_Threading" ] }
+log = "0.4"
+simplelog = "0.12"
+windows = { version = "0.51", features = [ "Win32_Foundation", "Win32_System_Diagnostics_Debug", "Win32_System_Memory", "Win32_System_ProcessStatus", "Win32_System_Kernel", "Win32_System_SystemServices", "Win32_System_Threading" ] }
 
 [build-dependencies]
 winresource = "0.1"

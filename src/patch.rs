@@ -56,3 +56,37 @@ pub unsafe fn patch(addr: usize, bytes: &[u8]) -> Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn calc_addr_offset() {
+        assert_eq!(addr_offset(0x80000000, 0x80000010, 3), [13, 0, 0, 0]);
+        assert_eq!(
+            addr_offset(0x80000000, 0x7FFFFF10, 4),
+            [12, 0xff, 0xff, 0xff]
+        );
+    }
+
+    #[test]
+    fn call_bytes() {
+        assert_eq!(call(0x80000000, 0x80000010), [0xE8, 11, 0, 0, 0]);
+    }
+
+    #[test]
+    fn jmp_bytes() {
+        assert_eq!(jmp(0x80000000, 0x80000010), [0xE9, 11, 0, 0, 0]);
+    }
+
+    #[test]
+    fn jl_bytes() {
+        assert_eq!(jl(0x80000000, 0x800000F0), [0x0F, 0x8C, 0xEA, 0, 0, 0]);
+    }
+
+    #[test]
+    fn jge_bytes() {
+        assert_eq!(jge(0x80000000, 0x800000E0), [0x0F, 0x8D, 0xDA, 0, 0, 0]);
+    }
+}
