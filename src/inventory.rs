@@ -245,22 +245,11 @@ impl ItemBox {
         let view_end = self.index + BAG_SIZE;
         let view_slice = &mut self.items[self.index..view_end];
         view_slice.clone_from_slice(&self.view.items);
-        // if any items were removed from the view, we should shift up the contents of the box to
-        // to fill the empty space. the game organizes the view for us when things are moved around,
-        // so any empty spaces should always be at the end.
-        let num_empty: usize = view_slice
-            .iter()
-            .map(|i| if i.is_empty() { 1 } else { 0 })
-            .sum();
-        if num_empty > 0 && !self.items.get(view_end).map_or(true, Item::is_empty) {
-            let remove_start = view_end - num_empty;
-            self.items.drain(remove_start..view_end);
-            // now we need to check and see if any two-slot items have ended up at an odd index.
-            self.fix_misaligned(remove_start);
-            self.update_view();
-            if !self.view.is_valid() {
-                log::warn!("View is in an invalid state after updating: {:?}", self);
-            }
+        // re-organize the box to account for any gaps or oddities in the view
+        self.organize();
+        self.update_view();
+        if !self.view.is_valid() {
+            log::warn!("View is in an invalid state after updating: {:?}", self);
         }
     }
 
