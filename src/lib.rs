@@ -1,16 +1,21 @@
 #![cfg(windows)]
 
 use std::ffi::c_void;
-use std::path::Path;
+use std::panic;
+use std::path::{Path, PathBuf};
 use std::str;
 
 use anyhow::Result;
 use configparser::ini::Ini;
+use simplelog::LevelFilter;
 use windows::Win32::Foundation::{BOOL, HMODULE};
-use windows::Win32::System::SystemServices::DLL_PROCESS_ATTACH;
+use windows::Win32::System::SystemServices::{DLL_PROCESS_ATTACH, DLL_PROCESS_DETACH};
 
 mod patch;
 use patch::*;
+
+mod error;
+use error::*;
 
 mod game;
 use game::*;
@@ -33,26 +38,26 @@ const MSG_FILES: [&[u8; 8]; 8] = [
 
 // I tried the naked-function crate, but it failed to compile for me, complaining about "unknown
 // directive" .pushsection. maybe it has something to do with the fact that I'm cross-compiling.
-static mut SCROLL_UP_TRAMPOLINE: [u8; 20] = [
+static mut SCROLL_UP_TRAMPOLINE: [u8; 18] = [
     0x60, // pushad
-    0x6A, 0xFE, // push -2
     0x57, // push edi
     0xE8, 0, 0, 0, 0, // call <fn>
-    0x83, 0xC4, 0x08, // add esp,8
+    0x83, 0xC4, 0x04, // add esp,4
     0x61, // popad
     0xBE, 0x9E, 0x4D, 0x5E, 0, // mov esi, 0x5e4d9e
     0xFF, 0xE6, // jmp esi
 ];
 
-static mut SCROLL_DOWN_TRAMPOLINE: [u8; 20] = [
-    0x60, // pushad
-    0x6A, 0x02, // push 2
+static mut SCROLL_DOWN_TRAMPOLINE: [u8; 27] = [
+    0x50, // push eax
     0x57, // push edi
     0xE8, 0, 0, 0, 0, // call <fn>
     0x83, 0xC4, 0x08, // add esp,8
-    0x61, // popad
-    0xBE, 0x9E, 0x4D, 0x5E, 0, // mov esi, 0x5e4d9e
-    0xFF, 0xE6, // jmp esi
+    0xBB, 0x3B, 0x39, 0x5E, 0x00, // mov ebx,0x5e393b
+    0x83, 0xF8, 0x06, // cmp eax,6
+    0x7C, 0x05, // jl do_jump
+    0xBB, 0x9E, 0x4D, 0x5E, 0x00, // mov ebx,0x5e4d9e
+    0xFF, 0xE3, // do_jump: jmp ebx
 ];
 
 static mut SCROLL_LEFT_TRAMPOLINE: [u8; 22] = [
@@ -68,18 +73,25 @@ static mut SCROLL_LEFT_TRAMPOLINE: [u8; 22] = [
     0xFF, 0xE2, // jmp edx
 ];
 
-static mut SCROLL_RIGHT_TRAMPOLINE: [u8; 25] = [
-    0x83, 0xF8, 0x06, // cmp eax,6
-    0x7C, 0x0D, // jl done
-    0x51, // push ecx
-    0x52, // push edx
+static mut SCROLL_RIGHT_TRAMPOLINE: [u8; 22] = [
+    0x83, 0xF8, 0x05, // cmp eax,5
+    0x7C, 0x0A, // jl done
+    0x50, // push eax
     0x57, // push edi
     0xE8, 0x00, 0x00, 0x00, 0x00, // call <fn>
-    0x83, 0xC4, 0x04, // add esp,4
-    0x5A, // pop edx
-    0x59, // pop ecx
-    0xBA, 0xF9, 0x39, 0x5E, 0x00, // done: mov edx,0x5e39f9
-    0xFF, 0xE2, // jmp edx
+    0x83, 0xC4, 0x08, // add esp,8
+    0xBB, 0x03, 0x3B, 0x5E, 0x00, // done: mov ebx,0x5e3b03
+    0xFF, 0xE3, // jmp ebx
+];
+
+static mut SCROLL_RIGHT_TWO_TRAMPOLINE: [u8; 28] = [
+    0xFF, 0xB7, 0xBC, 0x02, 0x00, 0x00, // push dword ptr [edi+0x2bc]
+    0x57, // push edi
+    0xE8, 0x00, 0x00, 0x00, 0x00, // call <fn>
+    0x83, 0xC4, 0x08, // add esp,8
+    0x89, 0x87, 0xBC, 0x02, 0x00, 0x00, // mov dword ptr [edi+0x2bc],eax
+    0xB8, 0x64, 0x3B, 0x5E, 0x00, // mov eax,0x5e3b64
+    0xFF, 0xE0, // jmp eax
 ];
 
 static mut PARTNER_BAG_ORG_TRAMPOLINE: [u8; 26] = [
@@ -285,17 +297,20 @@ static mut BOX: ItemBox = ItemBox::new();
 static mut GAME: Game = Game::new();
 
 unsafe extern "C" fn new_game() {
+    log::debug!("new_game");
     // reset the box when starting a new game
     BOX.set_contents(vec![]);
 }
 
 unsafe extern "fastcall" fn should_skip_shaft_check(partner: *const c_void) -> bool {
+    log::trace!("should_skip_shaft_check");
     // partner should never be null at this point of the code unless the box is open, but we'll
     // check both anyway just to be safe
     BOX.is_open() || partner.is_null()
 }
 
 unsafe extern "C" fn load_msg_file(lang: *const u8) -> *const u8 {
+    log::trace!("load_msg_file");
     let lang_slice = std::slice::from_raw_parts(lang, 3);
     if let Some(override_file) = MSG_FILES.iter().find(|f| f.starts_with(lang_slice)) {
         // make sure the file actually exists before we tell the game to load it
@@ -315,20 +330,33 @@ unsafe extern "C" fn load_msg_file(lang: *const u8) -> *const u8 {
 }
 
 unsafe extern "C" fn save_slot(index: usize) {
+    log::debug!("save_slot {}", index);
     GAME.save_to_slot(BOX.get_contents(), index);
 }
 
 unsafe extern "stdcall" fn save_data(filename: *const u8, buf: *const u8, size: usize) -> bool {
-    GAME.save(std::slice::from_raw_parts(buf, size), filename)
-        .is_ok()
+    log::trace!("save_data");
+    if let Err(e) = GAME.save(std::slice::from_raw_parts(buf, size), filename) {
+        log::error!("Failed to save: {:?}", e);
+        false
+    } else {
+        true
+    }
 }
 
 unsafe extern "C" fn load_slot(index: usize) {
+    log::debug!("load_slot {}", index);
     BOX.set_contents(GAME.load_from_slot(index));
+    // fix the box if we somehow saved it in an invalid state
+    BOX.organize();
 }
 
 unsafe extern "C" fn load_data(buf: *const u8, size: usize) -> usize {
-    GAME.load(std::slice::from_raw_parts(buf, size)).unwrap();
+    log::trace!("load_data");
+    if let Err(e) = GAME.load(std::slice::from_raw_parts(buf, size)) {
+        log::error!("Failed to load save data: {:?}", e);
+        panic!("Failed to load save data");
+    }
     UNMODDED_SAVE_SIZE
 }
 
@@ -338,6 +366,7 @@ unsafe extern "stdcall" fn make_room_for_double(
     unknown: *const c_void,
     item_size: usize,
 ) -> i32 {
+    log::trace!("make_room_for_double");
     if BOX.is_open() {
         if item_size > 1 {
             let index = *(menu.offset(0x2bc) as *const usize);
@@ -353,6 +382,7 @@ unsafe extern "stdcall" fn make_room_for_double(
 }
 
 unsafe extern "fastcall" fn show_partner_inventory(menu: *mut c_void) -> bool {
+    log::trace!("show_partner_inventory");
     if BOX.is_open() {
         // flag that the partner inventory is displayed
         *(menu.offset(0x2ca) as *mut bool) = true;
@@ -362,23 +392,30 @@ unsafe extern "fastcall" fn show_partner_inventory(menu: *mut c_void) -> bool {
 }
 
 unsafe fn close_box() {
+    log::debug!("close_box");
     BOX.close();
+    // fix the box if it somehow got into an invalid state
+    BOX.organize();
 }
 
 unsafe extern "C" fn change_character(menu: *mut c_void) {
+    log::trace!("change_character");
     if BOX.is_open() {
         GAME.update_exchange_state(menu);
     }
 }
 
 unsafe extern "C" fn menu_setup(menu: *mut c_void) {
+    log::trace!("menu_setup");
     if BOX.is_open() {
         GAME.init_menu(menu);
     }
 }
 
 unsafe fn open_box() -> bool {
+    log::debug!("open_box");
     if GAME.should_open_box {
+        log::debug!("Opening item box");
         GAME.prepare_inventory();
         BOX.open();
     }
@@ -387,6 +424,7 @@ unsafe fn open_box() -> bool {
 }
 
 unsafe extern "C" fn check_typewriter_choice(choice: i32) -> bool {
+    log::trace!("check_typewriter_choice");
     // "no" is option 2 for both messages
     if choice == 2 {
         true
@@ -400,10 +438,12 @@ unsafe extern "C" fn check_typewriter_choice(choice: i32) -> bool {
 }
 
 unsafe extern "C" fn track_typewriter_message(had_ink_ribbon: bool) {
+    log::trace!("track_typewriter_message {}", had_ink_ribbon);
     GAME.user_had_ink_ribbon = had_ink_ribbon;
 }
 
 unsafe extern "C" fn scroll_left(unknown: *const c_void) -> i32 {
+    log::trace!("scroll_left");
     if BOX.is_open() && BOX.scroll_view(-2) {
         GAME.draw_bags(unknown);
         if BOX.view().is_slot_two(1) {
@@ -412,21 +452,28 @@ unsafe extern "C" fn scroll_left(unknown: *const c_void) -> i32 {
             1
         }
     } else {
-        5 // we're already at the top, so wrap around to the last cell in the view
+        (BAG_SIZE - 1) as i32 // we're already at the top, so wrap around to the last cell in the view
     }
 }
 
-unsafe extern "C" fn scroll_right(unknown: *const c_void) -> i32 {
-    if BOX.is_open() && BOX.scroll_view(2) {
+unsafe extern "C" fn scroll_right(unknown: *const c_void, new_index: i32) -> i32 {
+    log::trace!("scroll_right {}", new_index);
+    let bag_size = BAG_SIZE as i32;
+    if BOX.is_open()
+        && (new_index == bag_size
+            || (new_index == bag_size - 1 && BOX.view().is_slot_two(new_index as usize)))
+        && BOX.scroll_view(2)
+    {
         GAME.draw_bags(unknown);
-        4
+        bag_size - 2
     } else {
-        0 // we're already at the bottom, so wrap around to the first cell in the view
+        new_index % bag_size
     }
 }
 
-unsafe extern "C" fn scroll(unknown: *const c_void, offset: isize) {
-    if BOX.is_open() && BOX.scroll_view(offset) {
+unsafe extern "C" fn scroll_up(unknown: *const c_void) {
+    log::trace!("scroll_up");
+    if BOX.is_open() && BOX.scroll_view(-2) {
         // by default the inventory display doesn't update at this point, so we have to do it ourselves
         GAME.draw_bags(unknown);
         // if we've ended up on the second slot of a two-slot item, back up one
@@ -440,13 +487,35 @@ unsafe extern "C" fn scroll(unknown: *const c_void, offset: isize) {
     }
 }
 
+unsafe extern "C" fn scroll_down(unknown: *const c_void, mut new_index: i32) -> i32 {
+    log::trace!("scroll_down {}", new_index);
+    if BOX.is_open() {
+        if new_index >= BAG_SIZE as i32 && BOX.scroll_view(2) {
+            // by default the inventory display doesn't update at this point, so we have to do it ourselves
+            GAME.draw_bags(unknown);
+            // the sound doesn't normally play when moving the cursor past the edges of the inventory,
+            // so we have to do that, too
+            GAME.play_sound(MOVE_SELECTION_SOUND);
+            new_index -= 2;
+        }
+        // if we've ended up on the second slot of a two-slot item, back up one
+        if BOX.view().is_slot_two(new_index as usize) {
+            return new_index - 1;
+        }
+    }
+
+    new_index
+}
+
 unsafe fn update_box() {
+    log::trace!("update_box");
     if BOX.is_open() {
         BOX.update_from_view();
     }
 }
 
 unsafe extern "C" fn get_box_if_open() -> *mut Bag {
+    log::trace!("get_box_if_open");
     if BOX.is_open() {
         BOX.view()
     } else {
@@ -460,6 +529,9 @@ unsafe extern "C" fn get_box_if_open() -> *mut Bag {
 }
 
 unsafe extern "fastcall" fn get_partner_bag(unknown: *mut c_void) -> *mut Bag {
+    // this function is called a lot, even outside the inventory menu, so logging it just floods
+    // the log with useless info
+    // log::trace!("get_partner_bag");
     if BOX.is_open() {
         return BOX.view();
     }
@@ -477,9 +549,216 @@ unsafe extern "fastcall" fn get_partner_bag(unknown: *mut c_void) -> *mut Bag {
     }
 }
 
+unsafe fn initialize(is_enabled: bool, is_leave_allowed: bool) -> Result<()> {
+    log::info!("Initializing item box mod");
+
+    GAME.init(is_enabled);
+
+    if is_enabled {
+        log::info!("Item box mod is enabled; installing all hooks");
+        // when the game tries to display the partner's inventory, show the box instead if it's open
+        let bag_jump = jmp(GET_PARTNER_BAG, get_partner_bag as usize);
+        patch(GET_PARTNER_BAG, &bag_jump)?;
+        let org_jump = jmp(
+            GET_PARTNER_BAG_ORG,
+            PARTNER_BAG_ORG_TRAMPOLINE.as_ptr() as usize,
+        );
+        set_trampoline(&mut PARTNER_BAG_ORG_TRAMPOLINE, 0, get_box_if_open as usize)?;
+        patch(GET_PARTNER_BAG_ORG, &org_jump)?;
+
+        // override the msg file the game looks for so we don't have to replace the originals
+        let msg_jump1 = jmp(MSG_LOAD1, MSG_TRAMPOLINE1.as_ptr() as usize);
+        set_trampoline(&mut MSG_TRAMPOLINE1, 0, load_msg_file as usize)?;
+        patch(MSG_LOAD1, &msg_jump1)?;
+
+        let msg_jump2 = jmp(MSG_LOAD2, MSG_TRAMPOLINE2.as_ptr() as usize);
+        set_trampoline(&mut MSG_TRAMPOLINE2, 0, load_msg_file as usize)?;
+        patch(MSG_LOAD2, &msg_jump2)?;
+
+        let msg_jump3 = jmp(MSG_LOAD3, MSG_TRAMPOLINE3.as_ptr() as usize);
+        set_trampoline(&mut MSG_TRAMPOLINE3, 0, load_msg_file as usize)?;
+        patch(MSG_LOAD3, &msg_jump3)?;
+
+        // when trying to scroll up past the top inventory row, scroll the box view
+        let scroll_up_jump = jl(SCROLL_UP_CHECK, SCROLL_UP_TRAMPOLINE.as_ptr() as usize);
+        set_trampoline(&mut SCROLL_UP_TRAMPOLINE, 2, scroll_up as usize)?;
+        patch(SCROLL_UP_CHECK, &scroll_up_jump)?;
+
+        // when trying to scroll down past the last inventory row, scroll the box view
+        let scroll_down_jump = jmp(SCROLL_DOWN_CHECK, SCROLL_DOWN_TRAMPOLINE.as_ptr() as usize);
+        set_trampoline(&mut SCROLL_DOWN_TRAMPOLINE, 2, scroll_down as usize)?;
+        patch(SCROLL_DOWN_CHECK, &scroll_down_jump)?;
+
+        // when trying to scroll left from the first inventory cell, scroll the box view
+        let scroll_left_jump = jmp(SCROLL_LEFT_CHECK, SCROLL_LEFT_TRAMPOLINE.as_ptr() as usize);
+        set_trampoline(&mut SCROLL_LEFT_TRAMPOLINE, 5, scroll_left as usize)?;
+        patch(SCROLL_LEFT_CHECK, &scroll_left_jump)?;
+
+        // when trying to scroll right from the last inventory cell, scroll the box view
+        let scroll_right_jump = jmp(
+            SCROLL_RIGHT_CHECK,
+            SCROLL_RIGHT_TRAMPOLINE.as_ptr() as usize,
+        );
+        set_trampoline(&mut SCROLL_RIGHT_TRAMPOLINE, 7, scroll_right as usize)?;
+        patch(SCROLL_RIGHT_CHECK, &scroll_right_jump)?;
+        let scroll_right_two_jump = jmp(
+            SCROLL_RIGHT_TWO_CHECK,
+            SCROLL_RIGHT_TWO_TRAMPOLINE.as_ptr() as usize,
+        );
+        set_trampoline(&mut SCROLL_RIGHT_TWO_TRAMPOLINE, 7, scroll_right as usize)?;
+        patch(SCROLL_RIGHT_TWO_CHECK, &scroll_right_two_jump)?;
+
+        // after the view is organized, copy its contents back into the box
+        let organize_jump1 = jmp(ORGANIZE_END1, ORGANIZE_TRAMPOLINE.as_ptr() as usize);
+        let organize_jump2 = jmp(ORGANIZE_END2, ORGANIZE_TRAMPOLINE.as_ptr() as usize);
+        set_trampoline(&mut ORGANIZE_TRAMPOLINE, 1, update_box as usize)?;
+        patch(ORGANIZE_END1, &organize_jump1)?;
+        patch(ORGANIZE_END2, &organize_jump2)?;
+
+        if !is_leave_allowed {
+            log::info!("Disabling leave option");
+            // disable leaving items since that would be OP when combined with the item box
+            patch(LEAVE_SOUND_ARG, &FAIL_SOUND.to_le_bytes())?;
+            patch(LEAVE_MENU_STATE, &[0xEB, 0x08])?; // short jump to skip the code that switches to the "leaving item" menu state
+        }
+
+        // handle the extra options when activating the typewriter
+        let has_ink_jump = jmp(HAS_INK_RIBBON, HAS_INK_RIBBON_TRAMPOLINE.as_ptr() as usize);
+        set_trampoline(
+            &mut HAS_INK_RIBBON_TRAMPOLINE,
+            3,
+            track_typewriter_message as usize,
+        )?;
+        patch(HAS_INK_RIBBON, &has_ink_jump)?;
+
+        let no_ink_jump = jmp(NO_INK_RIBBON, NO_INK_RIBBON_TRAMPOLINE.as_ptr() as usize);
+        set_trampoline(
+            &mut NO_INK_RIBBON_TRAMPOLINE,
+            3,
+            track_typewriter_message as usize,
+        )?;
+        patch(NO_INK_RIBBON, &no_ink_jump)?;
+
+        let choice_jump = jmp(
+            TYPEWRITER_CHOICE_CHECK,
+            TYPEWRITER_CHOICE_TRAMPOLINE.as_ptr() as usize,
+        );
+        set_trampoline(
+            &mut TYPEWRITER_CHOICE_TRAMPOLINE,
+            6,
+            check_typewriter_choice as usize,
+        )?;
+        patch(TYPEWRITER_CHOICE_CHECK, &choice_jump)?;
+
+        let box_jump = jmp(TYPEWRITER_PHASE_SET, OPEN_BOX_TRAMPOLINE.as_ptr() as usize);
+        set_trampoline(&mut OPEN_BOX_TRAMPOLINE, 1, open_box as usize)?;
+        set_trampoline(&mut OPEN_BOX_TRAMPOLINE, 19, SET_ROOM_PHASE)?;
+        patch(TYPEWRITER_PHASE_SET, &box_jump)?;
+
+        // make the menu show the box to start with instead of the partner control panel
+        let view_jump = jmp(
+            INVENTORY_OPEN_ANIMATION,
+            OPEN_ANIMATION_TRAMPOLINE.as_ptr() as usize,
+        );
+        set_trampoline(
+            &mut OPEN_ANIMATION_TRAMPOLINE,
+            1,
+            show_partner_inventory as usize,
+        )?;
+        set_trampoline(&mut OPEN_ANIMATION_TRAMPOLINE, 23, PLAY_MENU_ANIMATION)?;
+        patch(INVENTORY_OPEN_ANIMATION, &view_jump)?;
+
+        // always enable exchanging when a character first opens the box
+        let init_jump = jmp(
+            INVENTORY_MENU_START,
+            INVENTORY_START_TRAMPOLINE.as_ptr() as usize,
+        );
+        set_trampoline(&mut INVENTORY_START_TRAMPOLINE, 2, menu_setup as usize)?;
+        patch(INVENTORY_MENU_START, &init_jump)?;
+
+        // handle enabling and disabling exchanging when the character changes
+        let character_jump = jmp(
+            INVENTORY_CHANGE_CHARACTER,
+            CHANGE_CHARACTER_TRAMPOLINE.as_ptr() as usize,
+        );
+        set_trampoline(
+            &mut CHANGE_CHARACTER_TRAMPOLINE,
+            2,
+            change_character as usize,
+        )?;
+        patch(INVENTORY_CHANGE_CHARACTER, &character_jump)?;
+
+        // close the box after closing the inventory
+        let close_jump = jmp(
+            INVENTORY_MENU_CLOSE,
+            INVENTORY_CLOSE_TRAMPOLINE.as_ptr() as usize,
+        );
+        set_trampoline(&mut INVENTORY_CLOSE_TRAMPOLINE, 1, close_box as usize)?;
+        patch(INVENTORY_MENU_CLOSE, &close_jump)?;
+
+        // make room in the box if the player tries to swap a two-slot item into a full view
+        let double_jump = jmp(EXCHANGE_SIZE_CHECK, SIZE_CHECK_TRAMPOLINE.as_ptr() as usize);
+        set_trampoline(
+            &mut SIZE_CHECK_TRAMPOLINE,
+            11,
+            make_room_for_double as usize,
+        )?;
+        patch(EXCHANGE_SIZE_CHECK, &double_jump)?;
+
+        // skip the check preventing giving both shaft keys to the same character when the box
+        // is open. aside from being undesirable, it also crashes the game when using the box
+        // without having a partner character.
+        let shaft_jump = jmp(SHAFT_CHECK, SHAFT_CHECK_TRAMPOLINE.as_ptr() as usize);
+        set_trampoline(
+            &mut SHAFT_CHECK_TRAMPOLINE,
+            1,
+            should_skip_shaft_check as usize,
+        )?;
+        patch(SHAFT_CHECK, &shaft_jump)?;
+
+        // reset the box when starting a new game
+        let new_game_call = call(NEW_GAME, NEW_GAME_TRAMPOLINE.as_ptr() as usize);
+        set_trampoline(&mut NEW_GAME_TRAMPOLINE, 1, new_game as usize)?;
+        patch(NEW_GAME, &new_game_call)?;
+    } else {
+        log::info!("Item box mod is disabled; installing only save/load hooks");
+    }
+
+    // even if the mod is disabled, we still install our load and save handlers to prevent
+    // the game from blowing away saved boxes, and also so we can clear the box on any save
+    // slots that are saved to while the mod is inactive
+
+    // load data
+    let load_jump = jmp(POST_LOAD, LOAD_TRAMPOLINE.as_ptr() as usize);
+    set_trampoline(&mut LOAD_TRAMPOLINE, 2, load_data as usize)?;
+    set_trampoline(&mut LOAD_TRAMPOLINE, 20, SUB_6FC610)?;
+    patch(POST_LOAD, &load_jump)?;
+
+    // load slot
+    let ls_jump = jmp(LOAD_SLOT, LOAD_SLOT_TRAMPOLINE.as_ptr() as usize);
+    set_trampoline(&mut LOAD_SLOT_TRAMPOLINE, 2, load_slot as usize)?;
+    patch(LOAD_SLOT, &ls_jump)?;
+
+    // save data
+    let save_jump = jmp(STEAM_SAVE, SAVE_TRAMPOLINE.as_ptr() as usize);
+    set_trampoline(&mut SAVE_TRAMPOLINE, 6, save_data as usize)?;
+    patch(STEAM_SAVE, &save_jump)?;
+
+    // save slot
+    let ss_jump = jmp(SAVE_SLOT, SAVE_SLOT_TRAMPOLINE.as_ptr() as usize);
+    set_trampoline(&mut SAVE_SLOT_TRAMPOLINE, 2, save_slot as usize)?;
+    patch(SAVE_SLOT, &ss_jump)?;
+
+    log::info!("Patching complete");
+
+    Ok(())
+}
+
 fn main(reason: u32) -> Result<()> {
     if reason == DLL_PROCESS_ATTACH {
-        let config_path = unsafe { Game::get_game_dir() }.join("re0box.ini");
+        let game_dir = unsafe { Game::get_game_dir() };
+
+        let config_path = game_dir.join("re0box.ini");
         let mut config = Ini::new();
         // we don't care if the config fails to load, we'll just use the defaults
         let _ = config.load(config_path);
@@ -493,197 +772,31 @@ fn main(reason: u32) -> Result<()> {
             .ok()
             .flatten()
             .unwrap_or(false);
+        let log_level = config
+            .get("Log", "Level")
+            .map(|s| {
+                let s = s.to_lowercase();
+                LevelFilter::iter().find(|l| l.as_str().to_lowercase() == s)
+            })
+            .flatten()
+            .unwrap_or(LevelFilter::Info);
+        let mut log_file_path = config
+            .get("Log", "Path")
+            .map_or_else(|| PathBuf::from("re0box.log"), PathBuf::from);
 
-        unsafe {
-            GAME.init(is_enabled);
-
-            if is_enabled {
-                // when the game tries to display the partner's inventory, show the box instead if it's open
-                let bag_jump = jmp(GET_PARTNER_BAG, get_partner_bag as usize);
-                patch(GET_PARTNER_BAG, &bag_jump)?;
-                let org_jump = jmp(
-                    GET_PARTNER_BAG_ORG,
-                    PARTNER_BAG_ORG_TRAMPOLINE.as_ptr() as usize,
-                );
-                set_trampoline(&mut PARTNER_BAG_ORG_TRAMPOLINE, 0, get_box_if_open as usize)?;
-                patch(GET_PARTNER_BAG_ORG, &org_jump)?;
-
-                // override the msg file the game looks for so we don't have to replace the originals
-                let msg_jump1 = jmp(MSG_LOAD1, MSG_TRAMPOLINE1.as_ptr() as usize);
-                set_trampoline(&mut MSG_TRAMPOLINE1, 0, load_msg_file as usize)?;
-                patch(MSG_LOAD1, &msg_jump1)?;
-
-                let msg_jump2 = jmp(MSG_LOAD2, MSG_TRAMPOLINE2.as_ptr() as usize);
-                set_trampoline(&mut MSG_TRAMPOLINE2, 0, load_msg_file as usize)?;
-                patch(MSG_LOAD2, &msg_jump2)?;
-
-                let msg_jump3 = jmp(MSG_LOAD3, MSG_TRAMPOLINE3.as_ptr() as usize);
-                set_trampoline(&mut MSG_TRAMPOLINE3, 0, load_msg_file as usize)?;
-                patch(MSG_LOAD3, &msg_jump3)?;
-
-                // when trying to scroll up past the top inventory row, scroll the box view
-                let scroll_up_jump = jl(SCROLL_UP_CHECK, SCROLL_UP_TRAMPOLINE.as_ptr() as usize);
-                set_trampoline(&mut SCROLL_UP_TRAMPOLINE, 4, scroll as usize)?;
-                patch(SCROLL_UP_CHECK, &scroll_up_jump)?;
-
-                // when trying to scroll down past the last inventory row, scroll the box view
-                let scroll_down_jump =
-                    jge(SCROLL_DOWN_CHECK, SCROLL_DOWN_TRAMPOLINE.as_ptr() as usize);
-                set_trampoline(&mut SCROLL_DOWN_TRAMPOLINE, 4, scroll as usize)?;
-                patch(SCROLL_DOWN_CHECK, &scroll_down_jump)?;
-
-                // when trying to scroll left from the first inventory cell, scroll the box view
-                let scroll_left_jump =
-                    jmp(SCROLL_LEFT_CHECK, SCROLL_LEFT_TRAMPOLINE.as_ptr() as usize);
-                set_trampoline(&mut SCROLL_LEFT_TRAMPOLINE, 5, scroll_left as usize)?;
-                patch(SCROLL_LEFT_CHECK, &scroll_left_jump)?;
-
-                // when trying to scroll right from the last inventory cell, scroll the box view
-                let scroll_right_jump = jmp(
-                    SCROLL_RIGHT_CHECK,
-                    SCROLL_RIGHT_TRAMPOLINE.as_ptr() as usize,
-                );
-                set_trampoline(&mut SCROLL_RIGHT_TRAMPOLINE, 8, scroll_right as usize)?;
-                patch(SCROLL_RIGHT_CHECK, &scroll_right_jump)?;
-
-                // after the view is organized, copy its contents back into the box
-                let organize_jump1 = jmp(ORGANIZE_END1, ORGANIZE_TRAMPOLINE.as_ptr() as usize);
-                let organize_jump2 = jmp(ORGANIZE_END2, ORGANIZE_TRAMPOLINE.as_ptr() as usize);
-                set_trampoline(&mut ORGANIZE_TRAMPOLINE, 1, update_box as usize)?;
-                patch(ORGANIZE_END1, &organize_jump1)?;
-                patch(ORGANIZE_END2, &organize_jump2)?;
-
-                if !is_leave_allowed {
-                    // disable leaving items since that would be OP when combined with the item box
-                    patch(LEAVE_SOUND_ARG, &FAIL_SOUND.to_le_bytes())?;
-                    patch(LEAVE_MENU_STATE, &[0xEB, 0x08])?; // short jump to skip the code that switches to the "leaving item" menu state
-                }
-
-                // handle the extra options when activating the typewriter
-                let has_ink_jump = jmp(HAS_INK_RIBBON, HAS_INK_RIBBON_TRAMPOLINE.as_ptr() as usize);
-                set_trampoline(
-                    &mut HAS_INK_RIBBON_TRAMPOLINE,
-                    3,
-                    track_typewriter_message as usize,
-                )?;
-                patch(HAS_INK_RIBBON, &has_ink_jump)?;
-
-                let no_ink_jump = jmp(NO_INK_RIBBON, NO_INK_RIBBON_TRAMPOLINE.as_ptr() as usize);
-                set_trampoline(
-                    &mut NO_INK_RIBBON_TRAMPOLINE,
-                    3,
-                    track_typewriter_message as usize,
-                )?;
-                patch(NO_INK_RIBBON, &no_ink_jump)?;
-
-                let choice_jump = jmp(
-                    TYPEWRITER_CHOICE_CHECK,
-                    TYPEWRITER_CHOICE_TRAMPOLINE.as_ptr() as usize,
-                );
-                set_trampoline(
-                    &mut TYPEWRITER_CHOICE_TRAMPOLINE,
-                    6,
-                    check_typewriter_choice as usize,
-                )?;
-                patch(TYPEWRITER_CHOICE_CHECK, &choice_jump)?;
-
-                let box_jump = jmp(TYPEWRITER_PHASE_SET, OPEN_BOX_TRAMPOLINE.as_ptr() as usize);
-                set_trampoline(&mut OPEN_BOX_TRAMPOLINE, 1, open_box as usize)?;
-                set_trampoline(&mut OPEN_BOX_TRAMPOLINE, 19, SET_ROOM_PHASE)?;
-                patch(TYPEWRITER_PHASE_SET, &box_jump)?;
-
-                // make the menu show the box to start with instead of the partner control panel
-                let view_jump = jmp(
-                    INVENTORY_OPEN_ANIMATION,
-                    OPEN_ANIMATION_TRAMPOLINE.as_ptr() as usize,
-                );
-                set_trampoline(
-                    &mut OPEN_ANIMATION_TRAMPOLINE,
-                    1,
-                    show_partner_inventory as usize,
-                )?;
-                set_trampoline(&mut OPEN_ANIMATION_TRAMPOLINE, 23, PLAY_MENU_ANIMATION)?;
-                patch(INVENTORY_OPEN_ANIMATION, &view_jump)?;
-
-                // always enable exchanging when a character first opens the box
-                let init_jump = jmp(
-                    INVENTORY_MENU_START,
-                    INVENTORY_START_TRAMPOLINE.as_ptr() as usize,
-                );
-                set_trampoline(&mut INVENTORY_START_TRAMPOLINE, 2, menu_setup as usize)?;
-                patch(INVENTORY_MENU_START, &init_jump)?;
-
-                // handle enabling and disabling exchanging when the character changes
-                let character_jump = jmp(
-                    INVENTORY_CHANGE_CHARACTER,
-                    CHANGE_CHARACTER_TRAMPOLINE.as_ptr() as usize,
-                );
-                set_trampoline(
-                    &mut CHANGE_CHARACTER_TRAMPOLINE,
-                    2,
-                    change_character as usize,
-                )?;
-                patch(INVENTORY_CHANGE_CHARACTER, &character_jump)?;
-
-                // close the box after closing the inventory
-                let close_jump = jmp(
-                    INVENTORY_MENU_CLOSE,
-                    INVENTORY_CLOSE_TRAMPOLINE.as_ptr() as usize,
-                );
-                set_trampoline(&mut INVENTORY_CLOSE_TRAMPOLINE, 1, close_box as usize)?;
-                patch(INVENTORY_MENU_CLOSE, &close_jump)?;
-
-                // make room in the box if the player tries to swap a two-slot item into a full view
-                let double_jump = jmp(EXCHANGE_SIZE_CHECK, SIZE_CHECK_TRAMPOLINE.as_ptr() as usize);
-                set_trampoline(
-                    &mut SIZE_CHECK_TRAMPOLINE,
-                    11,
-                    make_room_for_double as usize,
-                )?;
-                patch(EXCHANGE_SIZE_CHECK, &double_jump)?;
-
-                // skip the check preventing giving both shaft keys to the same character when the box
-                // is open. aside from being undesirable, it also crashes the game when using the box
-                // without having a partner character.
-                let shaft_jump = jmp(SHAFT_CHECK, SHAFT_CHECK_TRAMPOLINE.as_ptr() as usize);
-                set_trampoline(
-                    &mut SHAFT_CHECK_TRAMPOLINE,
-                    1,
-                    should_skip_shaft_check as usize,
-                )?;
-                patch(SHAFT_CHECK, &shaft_jump)?;
-
-                // reset the box when starting a new game
-                let new_game_call = call(NEW_GAME, NEW_GAME_TRAMPOLINE.as_ptr() as usize);
-                set_trampoline(&mut NEW_GAME_TRAMPOLINE, 1, new_game as usize)?;
-                patch(NEW_GAME, &new_game_call)?;
-            }
-
-            // even if the mod is disabled, we still install our load and save handlers to prevent
-            // the game from blowing away saved boxes, and also so we can clear the box on any save
-            // slots that are saved to while the mod is inactive
-
-            // load data
-            let load_jump = jmp(POST_LOAD, LOAD_TRAMPOLINE.as_ptr() as usize);
-            set_trampoline(&mut LOAD_TRAMPOLINE, 2, load_data as usize)?;
-            set_trampoline(&mut LOAD_TRAMPOLINE, 20, SUB_6FC610)?;
-            patch(POST_LOAD, &load_jump)?;
-
-            // load slot
-            let ls_jump = jmp(LOAD_SLOT, LOAD_SLOT_TRAMPOLINE.as_ptr() as usize);
-            set_trampoline(&mut LOAD_SLOT_TRAMPOLINE, 2, load_slot as usize)?;
-            patch(LOAD_SLOT, &ls_jump)?;
-
-            // save data
-            let save_jump = jmp(STEAM_SAVE, SAVE_TRAMPOLINE.as_ptr() as usize);
-            set_trampoline(&mut SAVE_TRAMPOLINE, 6, save_data as usize)?;
-            patch(STEAM_SAVE, &save_jump)?;
-
-            // save slot
-            let ss_jump = jmp(SAVE_SLOT, SAVE_SLOT_TRAMPOLINE.as_ptr() as usize);
-            set_trampoline(&mut SAVE_SLOT_TRAMPOLINE, 2, save_slot as usize)?;
-            patch(SAVE_SLOT, &ss_jump)?;
+        if !log_file_path.is_absolute() {
+            log_file_path = game_dir.join(log_file_path);
         }
+
+        // ignore the result because there's nothing we can do if opening the log file fails (except
+        // crash, which we don't want to do)
+        let _ = open_log(log_level, log_file_path);
+        if let Err(e) = unsafe { initialize(is_enabled, is_leave_allowed) } {
+            log::error!("Initialization failed: {:?}", e);
+            return Err(e);
+        }
+    } else if reason == DLL_PROCESS_DETACH {
+        close_log();
     }
 
     Ok(())

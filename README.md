@@ -33,6 +33,11 @@ file (see the Configuration section below).
 The mod comes with a configuration file called re0box.ini with a couple options. You'll find it in your Resident Evil 0
 folder and you can open it with any text editor. Note that changes to this file won't take effect while the game is
 running; you'll need to restart the game for it to pick up any changes.
+
+**Enable**
+
+This section controls whether mod features are enabled.
+
 - Mod: this controls whether the mod is enabled. When Mod=1 (which is the default), the mod is enabled. If you change it
   to Mod=0, the mod is disabled.
 - Leave: this controls whether you're allowed to drop items (the "Leave" option in the inventory). The default is
@@ -40,12 +45,23 @@ running; you'll need to restart the game for it to pick up any changes.
   drop items is OP. But if you want both, you can change it to Leave=1, and then you'll be able to drop items and still
   access the item box.
 
+**Log**
+
+This section controls logging behavior.
+
+- Level: this controls how much information is logged. The options are off, error, warn, info, debug, and trace, where
+  each option logs progressively more information. High log levels (such as trace) may impact performance but are
+  useful for troubleshooting issues like crashes. The default is info.
+- Path: path to the log file, relative to the game folder. The default is re0box.log. If you don't want it to go in the
+  game folder, you can also use an absolute path for a different location, such as C:\Users\Bob\Documents\re0box.log.
+
 ## Uninstall
 Delete scripts\re0box.asi from the Resident Evil 0 folder. None of the other mod files will have any effect once that's
 gone, but if you want to purge everything, this is the full list of files added by the mod:
 - dinput8.dll (note that other mods may need this file. if you have anything in your scripts folder besides re0box.asi,
   you should leave this one alone.)
 - re0box.ini
+- re0box.log
 - re0box_readme.txt
 - nativePC\arc\message\msg_chS_box.arc
 - nativePC\arc\message\msg_chT_box.arc
@@ -58,12 +74,11 @@ gone, but if you want to purge everything, this is the full list of files added 
 - scripts\re0box.asi
 
 ## Build
-This mod is written in Rust. The default target is i686-windows-pc-gnu because RE0 is a 32-bit game and I'm
-cross-compiling from Linux. I imagine the MSVC toolchain would also work but I haven't tested it. As long as Rust and
-the appropriate toolchain are installed, you should just be able to do a `cargo build`. The mod is currently distributed
-as an ASI plugin using [Ultimate-ASI-Loader](https://github.com/ThirteenAG/Ultimate-ASI-Loader) as the loader. This
-helps ensure compatibility with other DLL-based mods. Just rename re0box.dll to re0box.asi and put it in the scripts
-folder.
+This mod is written in Rust. RE0 is a 32-bit game, so you'll need a 32-bit target installed. Either i686-pc-windows-gnu
+or i686-pc-windows-msvc will work. As long as Rust and an appropriate target are installed, you should just be able to
+do `cargo build --target=<target>`. The mod is currently distributed as an ASI plugin using
+[Ultimate-ASI-Loader](https://github.com/ThirteenAG/Ultimate-ASI-Loader) as the loader. This helps ensure compatibility
+with other DLL-based mods. Just rename re0box.dll to re0box.asi and put it in the scripts folder.
 
 Aside from the DLL itself, we also have to edit the game's message files so typewriters prompt to use the box. These are
 found in nativePC\arc\message. There's one file for each language the game supports, named in the format
@@ -85,4 +100,4 @@ This mod was made by descawed. I used a number of existing tools in the making o
 - ThirteenAG for [Ultimate ASI Loader](https://github.com/ThirteenAG/Ultimate-ASI-Loader)
 - FluffyQuack for [ARCtool](https://residentevilmodding.boards.net/thread/481/)
 - onepiecefreak3 for [GMDConverter](https://github.com/onepiecefreak3/GMDConverter)
-- ernestin1245 for the Spanish translation
+- ErnestJugend for the Spanish translation
