@@ -36,7 +36,7 @@ impl Item {
     }
 
     pub fn is_two_slot_item(&self) -> bool {
-        TWO_SLOT_ITEMS.iter().any(|i| *i == self.id)
+        TWO_SLOT_ITEMS.contains(&self.id)
     }
 }
 
