@@ -1,6 +1,6 @@
 [package]
 name = "re0box"
-version = "0.4.0"
+version = "0.4.1"
 authors = ["descawed <re0box@descawed.com>"]
 edition = "2021"
 description = "An item box mod for Resident Evil 0"
@@ -20,7 +20,7 @@ panic = "abort"
 
 [dependencies]
 anyhow = "1.0"
-binrw = "0.12"
+binrw = "0.13"
 configparser = "3.0"
 log = "0.4"
 simplelog = "0.12"
