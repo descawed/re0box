@@ -8,7 +8,7 @@ use std::{cmp, mem};
 use anyhow::Result;
 use simplelog::{Config, LevelFilter, WriteLogger};
 use windows::core::PWSTR;
-use windows::Win32::Foundation::{HMODULE, MAX_PATH};
+use windows::Win32::Foundation::{DBG_PRINTEXCEPTION_C, DBG_PRINTEXCEPTION_WIDE_C, HMODULE, MAX_PATH, NTSTATUS};
 use windows::Win32::System::Diagnostics::Debug::{
     AddVectoredExceptionHandler, RemoveVectoredExceptionHandler, CONTEXT_CONTROL_X86,
     CONTEXT_DEBUG_REGISTERS_X86, CONTEXT_FLOATING_POINT_X86, CONTEXT_INTEGER_X86,
@@ -24,6 +24,10 @@ use windows::Win32::System::ProcessStatus::{
 };
 use windows::Win32::System::Threading::GetCurrentProcess;
 
+const IGNORED_EXCEPTIONS: [NTSTATUS; 2] = [
+    DBG_PRINTEXCEPTION_C,
+    DBG_PRINTEXCEPTION_WIDE_C,
+];
 const STACK_DUMP_WORDS_PER_LINE: usize = 4;
 const STACK_DUMP_LINES: usize = 6;
 const READABLE_PROTECT: [PAGE_PROTECTION_FLAGS; 4] = [
@@ -36,16 +40,25 @@ const MAX_MODULES: usize = 1000;
 
 unsafe extern "system" fn exception_handler(exc_info: *mut EXCEPTION_POINTERS) -> i32 {
     if let Some(exc_info) = exc_info.as_ref() {
+        let mut had_notable_exception = false;
+
         // exception details
         let mut record_ptr = exc_info.ExceptionRecord;
         while let Some(record) = record_ptr.as_ref() {
-            log::error!(
-                "Unhandled exception {:08X} at {:08X}. Parameters: {:?}",
-                record.ExceptionCode.0,
-                record.ExceptionAddress as usize,
-                &record.ExceptionInformation[..record.NumberParameters as usize]
-            );
+            if !IGNORED_EXCEPTIONS.contains(&record.ExceptionCode) {
+                had_notable_exception = true;
+                log::error!(
+                    "Unhandled exception {:08X} at {:08X}. Parameters: {:?}",
+                    record.ExceptionCode.0,
+                    record.ExceptionAddress as usize,
+                    &record.ExceptionInformation[..record.NumberParameters as usize]
+                );
+            }
             record_ptr = record.ExceptionRecord;
+        }
+
+        if !had_notable_exception {
+            return ExceptionContinueSearch.0;
         }
 
         // registers
