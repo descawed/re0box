@@ -3,58 +3,165 @@ use std::ffi::c_void;
 use std::io::Cursor;
 use std::path::PathBuf;
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, Result};
 use binrw::{binrw, BinReaderExt, BinWrite};
 use windows::core::PWSTR;
 use windows::Win32::Foundation::MAX_PATH;
+use windows::Win32::System::Memory::PAGE_READONLY;
 use windows::Win32::System::Threading::{
     GetCurrentProcess, QueryFullProcessImageNameW, PROCESS_NAME_FORMAT,
 };
 
 use super::inventory::{Bag, Item};
+use super::patch::ByteSearcher;
 
-pub const GET_CHARACTER_BAG: usize = 0x0050DA80;
-pub const GET_PARTNER_BAG: usize = 0x004DC8B0;
-pub const DRAW_BAGS: usize = 0x005E6ED0;
-pub const PLAY_SOUND: usize = 0x005EE920;
-pub const GET_PARTNER_BAG_ORG: usize = 0x004DC625;
-pub const ORGANIZE_END1: usize = 0x004DADC7;
-pub const ORGANIZE_END2: usize = 0x004DADDA;
-pub const SCROLL_UP_CHECK: usize = 0x005E386A;
-pub const SCROLL_DOWN_CHECK: usize = 0x005E3935;
-pub const SCROLL_LEFT_CHECK: usize = 0x005E39F1;
-pub const SCROLL_RIGHT_CHECK: usize = 0x005E3AFD;
-pub const SCROLL_RIGHT_TWO_CHECK: usize = 0x005E3B5A;
-pub const GET_PARTNER_CHARACTER: usize = 0x0066DEC0;
-pub const SUB_522A20: usize = 0x00522A20;
-pub const PTR_DCDF3C: usize = 0x00DCDF3C;
-pub const LEAVE_SOUND_ARG: usize = 0x005E3634;
-pub const LEAVE_MENU_STATE: usize = 0x005E363D;
-pub const NO_INK_RIBBON: usize = 0x0057AD54;
-pub const HAS_INK_RIBBON: usize = 0x0057AD19;
-pub const TYPEWRITER_CHOICE_CHECK: usize = 0x0057ADA7;
-pub const TYPEWRITER_PHASE_SET: usize = 0x0057ADE6;
-pub const SET_ROOM_PHASE: usize = 0x00610C20;
-pub const PREPARE_INVENTORY: usize = 0x005D71D0;
-pub const INVENTORY_MENU_START: usize = 0x005E1B86;
-pub const INVENTORY_MENU_CLOSE: usize = 0x005D8983;
-pub const INVENTORY_CHANGE_CHARACTER: usize = 0x005E2BCA;
-pub const INVENTORY_OPEN_ANIMATION: usize = 0x005E1B4F;
-pub const PLAY_MENU_ANIMATION: usize = 0x005DBDF0;
-pub const EXCHANGE_SIZE_CHECK: usize = 0x005E3E94;
-pub const SUB_4DB330: usize = 0x004DB330;
-pub const PTR_DD0BD0: usize = 0x00DD0BD0;
-pub const STEAM_REMOTE_STORAGE: usize = 0x00CB1440;
-pub const LOAD_SLOT: usize = 0x006125F1;
-pub const POST_LOAD: usize = 0x008B5975;
-pub const SUB_6FC610: usize = 0x006FC610;
-pub const SAVE_SLOT: usize = 0x006134E9;
-pub const STEAM_SAVE: usize = 0x008B5CC1;
-pub const MSG_LOAD1: usize = 0x0040864E;
-pub const MSG_LOAD2: usize = 0x005D6471;
-pub const MSG_LOAD3: usize = 0x005D67E1;
-pub const SHAFT_CHECK: usize = 0x005E3D73;
-pub const NEW_GAME: usize = 0x0041249C;
+#[derive(Debug)]
+pub struct GameVersion {
+    pub version_string: &'static [u8],
+    pub get_character_bag: usize,
+    pub get_partner_bag: usize,
+    pub draw_bags: usize,
+    pub play_sound: usize,
+    pub get_partner_bag_org: usize,
+    pub organize_end1: usize,
+    pub organize_end2: usize,
+    pub scroll_up_check: usize,
+    pub scroll_down_check: usize,
+    pub scroll_left_check: usize,
+    pub scroll_right_check: usize,
+    pub scroll_right_two_check: usize,
+    pub get_partner_character: usize,
+    pub sub_522a20: usize,
+    pub ptr_dcdf3c: usize,
+    pub leave_sound_arg: usize,
+    pub leave_menu_state: usize,
+    pub no_ink_ribbon: usize,
+    pub has_ink_ribbon: usize,
+    pub typewriter_choice_check: usize,
+    pub typewriter_phase_set: usize,
+    pub set_room_phase: usize,
+    pub prepare_inventory: usize,
+    pub inventory_menu_start: usize,
+    pub inventory_menu_close: usize,
+    pub inventory_change_character: usize,
+    pub inventory_open_animation: usize,
+    pub play_menu_animation: usize,
+    pub exchange_size_check: usize,
+    pub sub_4db330: usize,
+    pub ptr_dd0bd0: usize,
+    pub steam_remote_storage: usize,
+    pub load_slot: usize,
+    pub post_load: usize,
+    pub sub_6fc610: usize,
+    pub save_slot: usize,
+    pub steam_save: usize,
+    pub msg_load1: usize,
+    pub msg_load2: usize,
+    pub msg_load3: usize,
+    pub shaft_check: usize,
+    pub new_game: usize,
+}
+
+impl GameVersion {
+    pub fn str_version(&self) -> String {
+        // remove null byte
+        String::from_utf8_lossy(&self.version_string[..self.version_string.len() - 1]).into_owned()
+    }
+}
+
+pub const SUPPORTED_VERSIONS: [GameVersion; 2] = [
+    GameVersion {
+        version_string: b"MasterRelease Aug 28 2018 14:42:14\0",
+        get_character_bag: 0x0050DA80,
+        get_partner_bag: 0x004DC8B0,
+        draw_bags: 0x005E6ED0,
+        play_sound: 0x005EE920,
+        get_partner_bag_org: 0x004DC625,
+        organize_end1: 0x004DADC7,
+        organize_end2: 0x004DADDA,
+        scroll_up_check: 0x005E386A,
+        scroll_down_check: 0x005E3935,
+        scroll_left_check: 0x005E39F1,
+        scroll_right_check: 0x005E3AFD,
+        scroll_right_two_check: 0x005E3B5A,
+        get_partner_character: 0x0066DEC0,
+        sub_522a20: 0x00522A20,
+        ptr_dcdf3c: 0x00DCDF3C,
+        leave_sound_arg: 0x005E3634,
+        leave_menu_state: 0x005E363D,
+        no_ink_ribbon: 0x0057AD54,
+        has_ink_ribbon: 0x0057AD19,
+        typewriter_choice_check: 0x0057ADA7,
+        typewriter_phase_set: 0x0057ADE6,
+        set_room_phase: 0x00610C20,
+        prepare_inventory: 0x005D71D0,
+        inventory_menu_start: 0x005E1B86,
+        inventory_menu_close: 0x005D8983,
+        inventory_change_character: 0x005E2BCA,
+        inventory_open_animation: 0x005E1B4F,
+        play_menu_animation: 0x005DBDF0,
+        exchange_size_check: 0x005E3E94,
+        sub_4db330: 0x004DB330,
+        ptr_dd0bd0: 0x00DD0BD0,
+        steam_remote_storage: 0x00CB1440,
+        load_slot: 0x006125F1,
+        post_load: 0x008B5975,
+        sub_6fc610: 0x006FC610,
+        save_slot: 0x006134E9,
+        steam_save: 0x008B5CC1,
+        msg_load1: 0x0040864E,
+        msg_load2: 0x005D6471,
+        msg_load3: 0x005D67E1,
+        shaft_check: 0x005E3D73,
+        new_game: 0x0041249C,
+    },
+    GameVersion {
+        version_string: b"MasterRelease Jan 28 2025 16:45:59\0",
+        get_character_bag: 0x0050DC70,
+        get_partner_bag: 0x004DCA00,
+        draw_bags: 0x005E7240,
+        play_sound: 0x005EECC0,
+        get_partner_bag_org: 0x004DC775,
+        organize_end1: 0x004DAF17,
+        organize_end2: 0x004DAF2A,
+        scroll_up_check: 0x005E3BDA,
+        scroll_down_check: 0x005E3CA5,
+        scroll_left_check: 0x005E3D61,
+        scroll_right_check: 0x005E3E6D,
+        scroll_right_two_check: 0x005E3ECA,
+        get_partner_character: 0x0096CD30,
+        sub_522a20: 0x00522AF0,
+        ptr_dcdf3c: 0x00DCBF3C,
+        leave_sound_arg: 0x005E39A4,
+        leave_menu_state: 0x005E39AD,
+        no_ink_ribbon: 0x0057ADA4,
+        has_ink_ribbon: 0x0057AD69,
+        typewriter_choice_check: 0x0057ADF7,
+        typewriter_phase_set: 0x0057AE36,
+        set_room_phase: 0x00610E00,
+        prepare_inventory: 0x005D7550,
+        inventory_menu_start: 0x005E1EF6,
+        inventory_menu_close: 0x005D8D03,
+        inventory_change_character: 0x005E2F3A,
+        inventory_open_animation: 0x005E1EBF,
+        play_menu_animation: 0x005DC170,
+        exchange_size_check: 0x005E4204,
+        sub_4db330: 0x004DB480,
+        steam_remote_storage: 0x00CB1458,
+        load_slot: 0x006127E1,
+        post_load: 0x008B3755,
+        sub_6fc610: 0x006FA100,
+        ptr_dd0bd0: 0x00DCEBD0,
+        save_slot: 0x006136D9,
+        steam_save: 0x008B3AA1,
+        msg_load1: 0x0040847E,
+        msg_load2: 0x005D67F1,
+        msg_load3: 0x005D6B61,
+        shaft_check: 0x005E40E3,
+        new_game: 0x0041240C,
+    },
+];
+
 pub const MOVE_SELECTION_SOUND: i32 = 2050;
 pub const FAIL_SOUND: i32 = 2053;
 pub const NUM_SAVE_SLOTS: usize = 20;
@@ -95,6 +202,7 @@ pub struct Game {
     ptr_dcdf3c: *const *const c_void,
     ptr_dd0bd0: *const *const c_void,
     saved_boxes: [ItemVec; NUM_SAVE_SLOTS],
+    current_version: Option<&'static GameVersion>,
 }
 
 impl Game {
@@ -137,22 +245,46 @@ impl Game {
                 ItemVec::new(),
                 ItemVec::new(),
             ],
+            current_version: None,
         }
     }
 
-    pub unsafe fn init(&mut self, is_mod_enabled: bool) {
+    pub unsafe fn init(&mut self, is_mod_enabled: bool) -> Result<()> {
+        // identify the current game version
+        let mut searcher = ByteSearcher::new();
+        searcher.discover_modules()?;
+        let searcher = searcher;
+        
+        for version in &SUPPORTED_VERSIONS {
+            if let [Some(_)] = searcher.find_bytes(&[version.version_string], Some(PAGE_READONLY), &["re0hd.exe"])? {
+                log::info!("Found game version: {}", version.str_version());
+                self.current_version = Some(version);
+                break;
+            }
+        }
+        
+        let Some(version) = self.current_version else {
+            bail!("Unsupported or unknown game version");
+        };
+        
         self.is_mod_enabled = is_mod_enabled;
-        self.draw_bags = Some(std::mem::transmute(DRAW_BAGS));
-        self.get_character_bag = Some(std::mem::transmute(GET_CHARACTER_BAG));
-        self.get_partner_character = Some(std::mem::transmute(GET_PARTNER_CHARACTER));
-        self.sub_522a20 = Some(std::mem::transmute(SUB_522A20));
-        self.prepare_inventory = Some(std::mem::transmute(PREPARE_INVENTORY));
-        self.sub_4db330 = Some(std::mem::transmute(SUB_4DB330));
-        self.play_sound = Some(std::mem::transmute(PLAY_SOUND));
+        self.draw_bags = Some(std::mem::transmute(version.draw_bags));
+        self.get_character_bag = Some(std::mem::transmute(version.get_character_bag));
+        self.get_partner_character = Some(std::mem::transmute(version.get_partner_character));
+        self.sub_522a20 = Some(std::mem::transmute(version.sub_522a20));
+        self.prepare_inventory = Some(std::mem::transmute(version.prepare_inventory));
+        self.sub_4db330 = Some(std::mem::transmute(version.sub_4db330));
+        self.play_sound = Some(std::mem::transmute(version.play_sound));
         self.get_remote_storage =
-            STEAM_REMOTE_STORAGE as *const unsafe extern "C" fn() -> *const *const usize;
-        self.ptr_dd0bd0 = PTR_DD0BD0 as *const *const c_void;
-        self.ptr_dcdf3c = PTR_DCDF3C as *const *const c_void;
+            version.steam_remote_storage as *const unsafe extern "C" fn() -> *const *const usize;
+        self.ptr_dd0bd0 = version.ptr_dd0bd0 as *const *const c_void;
+        self.ptr_dcdf3c = version.ptr_dcdf3c as *const *const c_void;
+        
+        Ok(())
+    }
+    
+    pub fn version(&self) -> &'static GameVersion {
+        self.current_version.unwrap()
     }
 
     pub unsafe fn init_menu(&mut self, menu: *mut c_void) {
@@ -219,11 +351,11 @@ impl Game {
         let buf = Vec::with_capacity(
             game_buf.len()
                 + MAGIC.len()
-                + NUM_SAVE_SLOTS * std::mem::size_of::<u32>()
+                + NUM_SAVE_SLOTS * size_of::<u32>()
                 + self
                     .saved_boxes
                     .iter()
-                    .fold(0, |a, b| a + b.items.len() * std::mem::size_of::<Item>()),
+                    .fold(0, |a, b| a + b.items.len() * size_of::<Item>()),
         );
         let mut writer = Cursor::new(buf);
         game_buf.write(&mut writer)?;
@@ -289,18 +421,14 @@ impl Game {
         let mut path_buf = [0u16; MAX_PATH as usize];
         let wstr = PWSTR::from_raw(path_buf.as_mut_ptr());
         let mut size = MAX_PATH;
-        match QueryFullProcessImageNameW(
+        QueryFullProcessImageNameW(
             GetCurrentProcess(),
             PROCESS_NAME_FORMAT::default(),
             wstr,
             &mut size,
         )
-        .ok()
-        .and_then(|_| wstr.to_string().ok())
-        .and_then(|s| PathBuf::from(s).parent().map(PathBuf::from))
-        {
-            Some(p) => p,
-            None => PathBuf::from("../"), // if we can't get the executable directory, just return the parent directory
-        }
+            .ok()
+            .and_then(|_| wstr.to_string().ok())
+            .and_then(|s| PathBuf::from(s).parent().map(PathBuf::from)).unwrap_or_else(|| PathBuf::from("../"))
     }
 }
