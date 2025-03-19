@@ -128,13 +128,13 @@ static mut TYPEWRITER_CHOICE_TRAMPOLINE: [u8; 18] = [
     0xC3, // ret
 ];
 
-static mut OPEN_BOX_TRAMPOLINE: [u8; 19] = [
+static mut OPEN_BOX_TRAMPOLINE: [u8; 20] = [
     0x60, // pushad
     0xE8, 0x00, 0x00, 0x00, 0x00, // call <fn>
     0x85, 0xC0, // test eax,eax
     0x61, // popad
-    0x74, 0x03, // jz phase
-    0xFF, 0x0C, 0x24, // dec dword ptr [esp]
+    0x74, 0x04, // jz phase
+    0xFF, 0x4C, 0x24, 0x04, // dec dword ptr [esp+4]
     0xE9, 0x00, 0x00, 0x00, 0x00, // phase: jmp SetRoomPhase
 ];
 
@@ -167,14 +167,14 @@ static mut CHANGE_CHARACTER_TRAMPOLINE: [u8; 23] = [
     0xE9, 0, 0, 0, 0, // jmp <return>
 ];
 
-static mut OPEN_ANIMATION_TRAMPOLINE: [u8; 23] = [
+static mut OPEN_ANIMATION_TRAMPOLINE: [u8; 24] = [
     0x60, // pushad
     0xE8, 0x00, 0x00, 0x00, 0x00, // call <fn>
     0x85, 0xC0, // test eax,eax
     0x61, // popad
-    0x74, 0x07, // jz do_call
-    0xC7, 0x04, 0x24, 0x01, 0x00, 0x00, 0x00, // mov dword ptr [esp],1
-    0xE9, 0x00, 0x00, 0x00, 0x00, // jmp PlayMenuAnimation
+    0x74, 0x08, // jz do_call
+    0xC7, 0x44, 0x24, 0x04, 0x01, 0x00, 0x00, 0x00, // mov dword ptr [esp+4],1
+    0xE9, 0x00, 0x00, 0x00, 0x00, // do_call: jmp PlayMenuAnimation
 ];
 
 static mut SIZE_CHECK_TRAMPOLINE: [u8; 16] = [
@@ -642,7 +642,7 @@ unsafe fn initialize(is_enabled: bool, is_leave_allowed: bool) -> Result<()> {
 
         let box_call = call(version.typewriter_phase_set, OPEN_BOX_TRAMPOLINE.as_ptr() as usize);
         set_trampoline(&mut OPEN_BOX_TRAMPOLINE, 1, open_box as usize)?;
-        set_trampoline(&mut OPEN_BOX_TRAMPOLINE, 14, version.set_room_phase)?;
+        set_trampoline(&mut OPEN_BOX_TRAMPOLINE, 15, version.set_room_phase)?;
         patch(version.typewriter_phase_set, &box_call)?;
 
         // make the menu show the box to start with instead of the partner control panel
@@ -655,7 +655,7 @@ unsafe fn initialize(is_enabled: bool, is_leave_allowed: bool) -> Result<()> {
             1,
             show_partner_inventory as usize,
         )?;
-        set_trampoline(&mut OPEN_ANIMATION_TRAMPOLINE, 18, version.play_menu_animation)?;
+        set_trampoline(&mut OPEN_ANIMATION_TRAMPOLINE, 19, version.play_menu_animation)?;
         patch(version.inventory_open_animation, &view_call)?;
 
         // always enable exchanging when a character first opens the box
