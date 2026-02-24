@@ -56,13 +56,14 @@ This section controls logging behavior.
   game folder, you can also use an absolute path for a different location, such as C:\Users\Bob\Documents\re0box.log.
 
 ## Uninstall
-Delete scripts\re0box.asi from the Resident Evil 0 folder. None of the other mod files will have any effect once that's
-gone, but if you want to purge everything, this is the full list of files added by the mod:
+Run re0box_uninstall.bat to uninstall the mod. If for some reason you want to uninstall manually, this is the full list
+of files added by the mod:
 - dinput8.dll (note that other mods may need this file. if you have anything in your scripts folder besides re0box.asi,
   you should leave this one alone.)
 - re0box.ini
 - re0box.log
 - re0box_readme.txt
+- re0box_uninstall.bat
 - nativePC\arc\message\msg_chS_box.arc
 - nativePC\arc\message\msg_chT_box.arc
 - nativePC\arc\message\msg_eng_box.arc
