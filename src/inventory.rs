@@ -165,13 +165,7 @@ impl ItemBox {
                     None => self.items.len(),
                 };
 
-                // this shouldn't happen, but if somehow we ended up with an empty slot in the
-                // middle of the box, just delete it
-                if self.items[range_start].is_empty() {
-                    self.items.remove(range_start);
-                } else {
-                    self.items[range_start..range_end].rotate_left(1);
-                }
+                self.items[range_start..range_end].rotate_left(1);
 
                 check_start = range_end;
             } else {
@@ -259,10 +253,13 @@ impl ItemBox {
                 // the view
                 self.items.swap(box_index - 1, box_index + 1);
             }
+            // fix any misaligned two-slot items that might have been introduced by the insertion
+            self.fix_misaligned(box_index + 1);
             self.update_view();
             if self.view.is_broken() {
                 log::warn!(
-                    "View is in a broken state after making room for two-slot item: {:?}",
+                    "View is in a broken state after making room for two-slot item at index {}: {:?}",
+                    index,
                     self
                 );
             }
@@ -432,6 +429,54 @@ mod tests {
         let view = item_box.view();
         assert!(view.items[BAG_SIZE - 2].is_empty());
         assert!(view.items[BAG_SIZE - 1].is_empty());
+    }
+
+    #[test]
+    fn make_room_for_double_with_two_slot_at_end() {
+        let mut item_box = ItemBox {
+            is_open: true,
+            items: vec![
+                Item { id: 5, count: 0 },
+                Item { id: 180, count: 1 },
+                Item { id: 38, count: 3 },
+                Item { id: 2, count: 1 },
+                Item { id: 104, count: 1 },
+                Item { id: 180, count: 1 },
+                Item { id: 2, count: 1 },
+                Item { id: 48, count: 1 },
+                Item { id: 3, count: 0 },
+                Item { id: 36, count: 6 },
+                Item { id: 35, count: 16 },
+                Item { id: 10, count: 8 },
+                Item { id: 53, count: 1 },
+                Item { id: 43, count: 1 },
+                Item { id: 43, count: 1 },
+                Item { id: 43, count: 1 },
+                Item { id: 55, count: 12 },
+                Item { id: 34, count: 1 },
+                Item { id: 39, count: 12 },
+                Item { id: 14, count: 3 },
+                Item { id: 53, count: 1 }
+            ],
+            index: 0,
+            view: Bag {
+                unknown00: 0,
+                items: [
+                    Item { id: 5, count: 0 },
+                    Item { id: 180, count: 1 },
+                    Item { id: 38, count: 3 },
+                    Item { id: 2, count: 1 },
+                    Item { id: 104, count: 1 },
+                    Item { id: 180, count: 1 }
+                ],
+                personal_item: Item { id: 0, count: 0 },
+                equipped_item_index: -1
+            }
+        };
+        assert!(item_box.view.is_valid());
+
+        item_box.make_room_for_double(2);
+        assert!(!item_box.view.is_broken());
     }
 
     #[test]
