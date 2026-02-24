@@ -528,10 +528,10 @@ unsafe fn initialize(is_enabled: bool, is_leave_allowed: bool) -> Result<()> {
     if is_enabled {
         log::info!("Item box mod is enabled; installing all hooks");
         // when the game tries to display the partner's inventory, show the box instead if it's open
-        let bag_jump = jmp(version.get_partner_bag, get_partner_bag as usize);
+        let bag_jump = jmp(version.get_partner_bag, get_partner_bag as *const () as usize);
         patch(version.get_partner_bag, &bag_jump)?;
 
-        let partner_bag_org_call = call(version.get_partner_bag_org, get_box_if_open as usize);
+        let partner_bag_org_call = call(version.get_partner_bag_org, get_box_if_open as *const () as usize);
         patch(version.get_partner_bag_org, &partner_bag_org_call)?;
         // nop out call to GetCharacterBag which is now handled by get_box_if_open
         patch(version.get_partner_bag_org + 0x10, &[NOP; 5])?;
@@ -541,19 +541,19 @@ unsafe fn initialize(is_enabled: bool, is_leave_allowed: bool) -> Result<()> {
         let msg_format = std::ptr::read_unaligned((version.msg_load1 + 1) as *const usize);
 
         let msg_jmp1 = jmp(version.msg_load1, MSG_TRAMPOLINE1.as_ptr() as usize);
-        set_trampoline(&mut MSG_TRAMPOLINE1, 0, load_msg_file as usize)?;
+        set_trampoline(&mut MSG_TRAMPOLINE1, 0, load_msg_file as *const () as usize)?;
         MSG_TRAMPOLINE1[9..13].copy_from_slice(&msg_format.to_le_bytes());
         set_trampoline(&mut MSG_TRAMPOLINE1, 13, version.msg_load1 + 5)?;
         patch(version.msg_load1, &msg_jmp1)?;
 
         let msg_jmp2 = jmp(version.msg_load2, MSG_TRAMPOLINE2.as_ptr() as usize);
-        set_trampoline(&mut MSG_TRAMPOLINE2, 0, load_msg_file as usize)?;
+        set_trampoline(&mut MSG_TRAMPOLINE2, 0, load_msg_file as *const () as usize)?;
         MSG_TRAMPOLINE2[9..13].copy_from_slice(&msg_format.to_le_bytes());
         set_trampoline(&mut MSG_TRAMPOLINE2, 13, version.msg_load2 + 5)?;
         patch(version.msg_load2, &msg_jmp2)?;
 
         let msg_jmp3 = jmp(version.msg_load3, MSG_TRAMPOLINE3.as_ptr() as usize);
-        set_trampoline(&mut MSG_TRAMPOLINE3, 0, load_msg_file as usize)?;
+        set_trampoline(&mut MSG_TRAMPOLINE3, 0, load_msg_file as *const () as usize)?;
         MSG_TRAMPOLINE3[9..13].copy_from_slice(&msg_format.to_le_bytes());
         set_trampoline(&mut MSG_TRAMPOLINE3, 13, version.msg_load3 + 5)?;
         patch(version.msg_load3, &msg_jmp3)?;
@@ -561,21 +561,21 @@ unsafe fn initialize(is_enabled: bool, is_leave_allowed: bool) -> Result<()> {
         // when trying to scroll up past the top inventory row, scroll the box view
         let scroll_up_return = get_conditional_jump_target(version.scroll_up_check as *const c_void);
         let scroll_up_jump = jl(version.scroll_up_check, SCROLL_UP_TRAMPOLINE.as_ptr() as usize);
-        set_trampoline(&mut SCROLL_UP_TRAMPOLINE, 2, scroll_up as usize)?;
+        set_trampoline(&mut SCROLL_UP_TRAMPOLINE, 2, scroll_up as *const () as usize)?;
         set_trampoline(&mut SCROLL_UP_TRAMPOLINE, 11, scroll_up_return as usize)?;
         patch(version.scroll_up_check, &scroll_up_jump)?;
 
         // when trying to scroll down past the last inventory row, scroll the box view
         let scroll_down_return = get_conditional_jump_target(version.scroll_down_check as *const c_void);
         let scroll_down_jump = jmp(version.scroll_down_check, SCROLL_DOWN_TRAMPOLINE.as_ptr() as usize);
-        set_trampoline(&mut SCROLL_DOWN_TRAMPOLINE, 2, scroll_down as usize)?;
+        set_trampoline(&mut SCROLL_DOWN_TRAMPOLINE, 2, scroll_down as *const () as usize)?;
         set_conditional_trampoline(&mut SCROLL_DOWN_TRAMPOLINE, 13, scroll_down_return as usize)?;
         set_trampoline(&mut SCROLL_DOWN_TRAMPOLINE, 19, version.scroll_down_check + 6)?;
         patch(version.scroll_down_check, &scroll_down_jump)?;
 
         // when trying to scroll left from the first inventory cell, scroll the box view
         let scroll_left_jump = jmp(version.scroll_left_check, SCROLL_LEFT_TRAMPOLINE.as_ptr() as usize);
-        set_trampoline(&mut SCROLL_LEFT_TRAMPOLINE, 5, scroll_left as usize)?;
+        set_trampoline(&mut SCROLL_LEFT_TRAMPOLINE, 5, scroll_left as *const () as usize)?;
         set_trampoline(&mut SCROLL_LEFT_TRAMPOLINE, 15, version.scroll_left_check + 8)?;
         patch(version.scroll_left_check, &scroll_left_jump)?;
 
@@ -584,7 +584,7 @@ unsafe fn initialize(is_enabled: bool, is_leave_allowed: bool) -> Result<()> {
             version.scroll_right_check,
             SCROLL_RIGHT_TRAMPOLINE.as_ptr() as usize,
         );
-        set_trampoline(&mut SCROLL_RIGHT_TRAMPOLINE, 7, scroll_right as usize)?;
+        set_trampoline(&mut SCROLL_RIGHT_TRAMPOLINE, 7, scroll_right as *const () as usize)?;
         set_trampoline(&mut SCROLL_RIGHT_TRAMPOLINE, 15, version.scroll_right_check + 6)?;
         patch(version.scroll_right_check, &scroll_right_jump)?;
 
@@ -592,14 +592,14 @@ unsafe fn initialize(is_enabled: bool, is_leave_allowed: bool) -> Result<()> {
             version.scroll_right_two_check,
             SCROLL_RIGHT_TWO_TRAMPOLINE.as_ptr() as usize,
         );
-        set_trampoline(&mut SCROLL_RIGHT_TWO_TRAMPOLINE, 7, scroll_right as usize)?;
+        set_trampoline(&mut SCROLL_RIGHT_TWO_TRAMPOLINE, 7, scroll_right as *const () as usize)?;
         set_trampoline(&mut SCROLL_RIGHT_TWO_TRAMPOLINE, 21, version.scroll_right_two_check + 10)?;
         patch(version.scroll_right_two_check, &scroll_right_two_jump)?;
 
         // after the view is organized, copy its contents back into the box
         let organize_jump1 = jmp(version.organize_end1, ORGANIZE_TRAMPOLINE.as_ptr() as usize);
         let organize_jump2 = jmp(version.organize_end2, ORGANIZE_TRAMPOLINE.as_ptr() as usize);
-        set_trampoline(&mut ORGANIZE_TRAMPOLINE, 1, update_box as usize)?;
+        set_trampoline(&mut ORGANIZE_TRAMPOLINE, 1, update_box as *const () as usize)?;
         patch(version.organize_end1, &organize_jump1)?;
         patch(version.organize_end2, &organize_jump2)?;
 
@@ -615,7 +615,7 @@ unsafe fn initialize(is_enabled: bool, is_leave_allowed: bool) -> Result<()> {
         set_trampoline(
             &mut HAS_INK_RIBBON_TRAMPOLINE,
             3,
-            track_typewriter_message as usize,
+            track_typewriter_message as *const () as usize,
         )?;
         set_trampoline(&mut HAS_INK_RIBBON_TRAMPOLINE, 19, version.has_ink_ribbon + 7)?;
         patch(version.has_ink_ribbon, &has_ink_jump)?;
@@ -624,7 +624,7 @@ unsafe fn initialize(is_enabled: bool, is_leave_allowed: bool) -> Result<()> {
         set_trampoline(
             &mut NO_INK_RIBBON_TRAMPOLINE,
             3,
-            track_typewriter_message as usize,
+            track_typewriter_message as *const () as usize,
         )?;
         set_trampoline(&mut NO_INK_RIBBON_TRAMPOLINE, 19, version.no_ink_ribbon + 7)?;
         patch(version.no_ink_ribbon, &no_ink_jump)?;
@@ -636,12 +636,12 @@ unsafe fn initialize(is_enabled: bool, is_leave_allowed: bool) -> Result<()> {
         set_trampoline(
             &mut TYPEWRITER_CHOICE_TRAMPOLINE,
             6,
-            check_typewriter_choice as usize,
+            check_typewriter_choice as *const () as usize,
         )?;
         patch(version.typewriter_choice_check, &choice_call)?;
 
         let box_call = call(version.typewriter_phase_set, OPEN_BOX_TRAMPOLINE.as_ptr() as usize);
-        set_trampoline(&mut OPEN_BOX_TRAMPOLINE, 1, open_box as usize)?;
+        set_trampoline(&mut OPEN_BOX_TRAMPOLINE, 1, open_box as *const () as usize)?;
         set_trampoline(&mut OPEN_BOX_TRAMPOLINE, 15, version.set_room_phase)?;
         patch(version.typewriter_phase_set, &box_call)?;
 
@@ -653,7 +653,7 @@ unsafe fn initialize(is_enabled: bool, is_leave_allowed: bool) -> Result<()> {
         set_trampoline(
             &mut OPEN_ANIMATION_TRAMPOLINE,
             1,
-            show_partner_inventory as usize,
+            show_partner_inventory as *const () as usize,
         )?;
         set_trampoline(&mut OPEN_ANIMATION_TRAMPOLINE, 19, version.play_menu_animation)?;
         patch(version.inventory_open_animation, &view_call)?;
@@ -663,7 +663,7 @@ unsafe fn initialize(is_enabled: bool, is_leave_allowed: bool) -> Result<()> {
             version.inventory_menu_start,
             INVENTORY_START_TRAMPOLINE.as_ptr() as usize,
         );
-        set_trampoline(&mut INVENTORY_START_TRAMPOLINE, 2, menu_setup as usize)?;
+        set_trampoline(&mut INVENTORY_START_TRAMPOLINE, 2, menu_setup as *const () as usize)?;
         set_trampoline(&mut INVENTORY_START_TRAMPOLINE, 17, version.inventory_menu_start + 6)?;
         patch(version.inventory_menu_start, &init_jump)?;
 
@@ -675,7 +675,7 @@ unsafe fn initialize(is_enabled: bool, is_leave_allowed: bool) -> Result<()> {
         set_trampoline(
             &mut CHANGE_CHARACTER_TRAMPOLINE,
             2,
-            change_character as usize,
+            change_character as *const () as usize,
         )?;
         set_trampoline(&mut CHANGE_CHARACTER_TRAMPOLINE, 18, version.inventory_change_character + 7)?;
         patch(version.inventory_change_character, &character_jump)?;
@@ -685,7 +685,7 @@ unsafe fn initialize(is_enabled: bool, is_leave_allowed: bool) -> Result<()> {
             version.inventory_menu_close,
             INVENTORY_CLOSE_TRAMPOLINE.as_ptr() as usize,
         );
-        set_trampoline(&mut INVENTORY_CLOSE_TRAMPOLINE, 1, close_box as usize)?;
+        set_trampoline(&mut INVENTORY_CLOSE_TRAMPOLINE, 1, close_box as *const () as usize)?;
         set_trampoline(&mut INVENTORY_CLOSE_TRAMPOLINE, 12, version.inventory_menu_close + 5)?;
         patch(version.inventory_menu_close, &close_call)?;
 
@@ -695,7 +695,7 @@ unsafe fn initialize(is_enabled: bool, is_leave_allowed: bool) -> Result<()> {
         set_trampoline(
             &mut SIZE_CHECK_TRAMPOLINE,
             11,
-            make_room_for_double as usize,
+            make_room_for_double as *const () as usize,
         )?;
         patch(version.exchange_size_check, &double_jump)?;
 
@@ -707,7 +707,7 @@ unsafe fn initialize(is_enabled: bool, is_leave_allowed: bool) -> Result<()> {
         set_trampoline(
             &mut SHAFT_CHECK_TRAMPOLINE,
             1,
-            should_skip_shaft_check as usize,
+            should_skip_shaft_check as *const () as usize,
         )?;
         SHAFT_CHECK_TRAMPOLINE[10..14].copy_from_slice(&(version.shaft_check + 5).to_le_bytes());
         SHAFT_CHECK_TRAMPOLINE[15..19].copy_from_slice(&(original_function as usize).to_le_bytes());
@@ -717,7 +717,7 @@ unsafe fn initialize(is_enabled: bool, is_leave_allowed: bool) -> Result<()> {
         // reset the box when starting a new game
         let original_function = get_call_target(version.new_game as *const c_void);
         let new_game_call = call(version.new_game, NEW_GAME_TRAMPOLINE.as_ptr() as usize);
-        set_trampoline(&mut NEW_GAME_TRAMPOLINE, 1, new_game as usize)?;
+        set_trampoline(&mut NEW_GAME_TRAMPOLINE, 1, new_game as *const () as usize)?;
         set_trampoline(&mut NEW_GAME_TRAMPOLINE, 7, original_function as usize)?;
         patch(version.new_game, &new_game_call)?;
     } else {
@@ -730,26 +730,26 @@ unsafe fn initialize(is_enabled: bool, is_leave_allowed: bool) -> Result<()> {
 
     // load data
     let load_jump = jmp(version.post_load, LOAD_TRAMPOLINE.as_ptr() as usize);
-    set_trampoline(&mut LOAD_TRAMPOLINE, 2, load_data as usize)?;
+    set_trampoline(&mut LOAD_TRAMPOLINE, 2, load_data as *const () as usize)?;
     set_trampoline(&mut LOAD_TRAMPOLINE, 20, version.sub_6fc610)?;
     LOAD_TRAMPOLINE[16..20].copy_from_slice(&(version.post_load + 11).to_le_bytes());
     patch(version.post_load, &load_jump)?;
 
     // load slot
     let ls_jump = jmp(version.load_slot, LOAD_SLOT_TRAMPOLINE.as_ptr() as usize);
-    set_trampoline(&mut LOAD_SLOT_TRAMPOLINE, 2, load_slot as usize)?;
+    set_trampoline(&mut LOAD_SLOT_TRAMPOLINE, 2, load_slot as *const () as usize)?;
     set_trampoline(&mut LOAD_SLOT_TRAMPOLINE, 17, version.load_slot + 6)?;
     patch(version.load_slot, &ls_jump)?;
 
     // save data
     let save_jump = jmp(version.steam_save, SAVE_TRAMPOLINE.as_ptr() as usize);
     SAVE_TRAMPOLINE[2..6].copy_from_slice(&(version.steam_save + 7).to_le_bytes());
-    set_trampoline(&mut SAVE_TRAMPOLINE, 6, save_data as usize)?;
+    set_trampoline(&mut SAVE_TRAMPOLINE, 6, save_data as *const () as usize)?;
     patch(version.steam_save, &save_jump)?;
 
     // save slot
     let ss_jump = jmp(version.save_slot, SAVE_SLOT_TRAMPOLINE.as_ptr() as usize);
-    set_trampoline(&mut SAVE_SLOT_TRAMPOLINE, 2, save_slot as usize)?;
+    set_trampoline(&mut SAVE_SLOT_TRAMPOLINE, 2, save_slot as *const () as usize)?;
     set_trampoline(&mut SAVE_SLOT_TRAMPOLINE, 17, version.save_slot + 6)?;
     patch(version.save_slot, &ss_jump)?;
 
