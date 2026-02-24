@@ -9,7 +9,7 @@ use std::str;
 use anyhow::Result;
 use configparser::ini::Ini;
 use simplelog::LevelFilter;
-use windows::Win32::Foundation::{BOOL, HMODULE};
+use windows::Win32::Foundation::HMODULE;
 use windows::Win32::System::SystemServices::{DLL_PROCESS_ATTACH, DLL_PROCESS_DETACH};
 
 mod patch;
@@ -808,6 +808,6 @@ fn main(reason: u32) -> Result<()> {
 
 #[no_mangle]
 #[allow(non_snake_case)]
-extern "system" fn DllMain(_dll_module: HMODULE, reason: u32, _reserved: *const c_void) -> BOOL {
-    main(reason).is_ok().into()
+extern "system" fn DllMain(_dll_module: HMODULE, reason: u32, _reserved: *const c_void) -> i32 {
+    if main(reason).is_ok() { 1 } else { 0 }
 }
